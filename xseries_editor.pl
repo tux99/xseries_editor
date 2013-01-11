@@ -105,7 +105,20 @@ my $darrow_bits=pack("b11"x10,
     ".....1.....",
     "...........");
 
+# array mapping MIDI note numbers 0-127 to note names C-1 to G9
+my @notes;
+my @keys=('C ', 'C#', 'D ', 'D#', 'E ', 'F ', 'F#', 'G ', 'G#', 'A ', 'A#', 'B ');
+for (my $nnr=0; $nnr<128; $nnr++) {
+    my $key=($nnr%12);
+    my $oct=int($nnr/12)-1;
+    $notes[$nnr]=$keys[$key].$oct;
+}
+# hash mapping note names C-1 to G9 to MIDI note numbers 0-127
+my %noteshash; @noteshash{@notes}=0..$#notes;
+
+
 # program paramters
+my $modified=0;
 my $prgfilename='';
 my $program_name;    my $osc_mode;
 my $assign;          my $hold;
@@ -123,6 +136,25 @@ my $VDFmod_wav;      my $VDFmgfreq;
 my $VDFmgint;        my $VDFmgdly;
 my $VDF_OSC1;        my $VDF_OSC2;
 my $VDFkeysync;
+my @VDF_AT;          my @VDF_AL;
+my @VDF_DT;          my @VDF_BP;
+my @VDF_ST;          my @VDF_SL;
+my @VDF_RT;          my @VDF_RL;
+my @VDFcoffvl;       my @VDFcoffkt;
+my @VDF_EGint;       my @VDF_EGtkt;
+my @VDF_EGtvs;       my @VDF_EGivs;
+my @VDF_kbdtk;
+my @VDA_AT;          my @VDA_AL;
+my @VDA_DT;          my @VDA_BP;
+my @VDA_ST;          my @VDA_SL;
+my @VDA_RT;
+my @VDAosclv;        my @VDAakti;
+my @VDAavs;          my @VDAegtkt;
+my @VDAegtvs;        my @VDA_kbdtk;
+my @PMG_freq;        my @PMG_dly;
+my @PMG_Fin;         my @PMG_Int;
+my @PMG_FMKT;        my @PMG_IMA;
+my @PMG_IMJ;         my @PMG_FMAJ;
 
 # selected and available midi in/out devices
 my $midi_outdev="";
@@ -140,6 +172,11 @@ my $f02;
 my $f03;
 my $f04;
 my $f05;
+my @f06;
+my @f07;
+my @f08;
+my @f09;
+my @f10;
 my $combwin;
 my $midiupload;
 
@@ -203,28 +240,55 @@ $tab[1] = $book->add('Tab1', -label=>'Oscillator 1');
 $tab[2] = $book->add('Tab2', -label=>'Oscillator 2');
 $tab[3] = $book->add('Tab3', -label=>'Effects');
 
-my $col1 =$tab[0]->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
-my $col23=$tab[0]->Frame()->pack(-side=>'top',  -fill=>'x',    -expand=>1);
-my $col2 =$tab[0]->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
-my $col3 =$tab[0]->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
+# main tab
+sub Main_Tab {
+    my $col1 =$tab[0]->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
+    my $col23=$tab[0]->Frame()->pack(-side=>'top',  -fill=>'x');
+    my $col2 =$tab[0]->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
+    my $col3 =$tab[0]->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
 
-$f01=$col1->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1);
-$f03=$col1->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1);
-$f05=$col2->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1);
-$f04=$col2->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1);
-$f02=$col3->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1);
+    $f01=$col1->Frame(%Frame_defaults)->pack(-fill=>'x');
+    $f03=$col1->Frame(%Frame_defaults)->pack(-fill=>'x');
+    $f05=$col2->Frame(%Frame_defaults)->pack(-fill=>'x');
+    $f04=$col2->Frame(%Frame_defaults)->pack(-fill=>'x');
+    $f02=$col3->Frame(%Frame_defaults)->pack(-fill=>'x');
 
-# photo of X5DR front panel (purely for decorative purposes)
-my $jpg1=$col23->Photo( '-format'=>'jpeg', -file=>'x5dr.jpg');
-$col23->Label(-image=>$jpg1, -borderwidth=>0, -relief=>'flat', -anchor=>'n',-height=>92
-)->pack(-anchor=>'n', -fill=>'x', -ipadx=>2);
+    # photo of X5DR front panel (purely for decorative purposes)
+    my $jpg1=$col23->Photo( '-format'=>'jpeg', -file=>'x5dr.jpg');
+    $col23->Label(-image=>$jpg1, -borderwidth=>0, -relief=>'flat', -anchor=>'n',-height=>92
+    )->pack(-anchor=>'n', -fill=>'x', -ipadx=>2);
+
+    Main_Prg_Frame();
+    Aftertouch_Frame();
+    Joystick_Frame();
+    Pitch_EG_Frame();
+    VDF_Cutoff_Frame();
+}
+
+# osc tabs
+sub Osc_Tabs {
+    for (my $n=1; $n<=2; $n++) {
+        my $col1=$tab[$n]->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
+        my $col2=$tab[$n]->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
+        my $col3=$tab[$n]->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
+
+        $f10[$n]=$col1->Frame(%Frame_defaults)->pack(-fill=>'x');
+        $f09[$n]=$col2->Frame(%Frame_defaults)->pack(-fill=>'x');
+        $f08[$n]=$col2->Frame(%Frame_defaults)->pack(-fill=>'x');
+        $f07[$n]=$col3->Frame(%Frame_defaults)->pack(-fill=>'x');
+        $f06[$n]=$col3->Frame(%Frame_defaults)->pack(-fill=>'x');
+
+        VDF_EG_Frame($n);
+        VDF_Frame($n);
+        VDA_EG_Frame($n);
+        VDA_Frame($n);
+        Pitch_Mod($n);
+    }
+}
 
 
-Main_Prg_Frame();
-Aftertouch_Frame();
-Joystick_Frame();
-Pitch_EG_Frame();
-VDF_Cutoff_Frame();
+Main_Tab();
+Osc_Tabs();
 
 
 MainLoop;
@@ -289,18 +353,95 @@ sub StatusBar {
     )->pack(-side=>'left', -padx=>2, -pady=>2);
 
     $midiupload=$stb->Button(
-        -text         => 'Upload via MIDI to RM50',
+        -text         => 'Upload via MIDI to Korg',
         -pady         => 2,
         -underline    => 0,
-        -command      => \&SysexVceUpload
+        -command      => \&SysexPrgUpload
     )->pack(-side=>'right');
-    $mw->bind($mw, "<Control-u>"=>\&SysexVceUpload);
+    $mw->bind($mw, "<Control-u>"=>\&SysexPrgUpload);
 
     if ($midi_outdev ne '') {
         $midiupload->configure(-state=>'active');
     } else {
         $midiupload->configure(-state=>'disabled');
     }
+}
+
+# load a program sysex dump
+sub loadPrgFile {
+    my $rtn="";
+    if ($modified == 1) {
+        $rtn=UnsavedChanges(\$mw, 'Open new file anyway?');
+    }
+    if ($rtn eq "Yes" || $modified == 0) {
+        my $types=[ ['Sysex Files', ['.syx', '.SYX']], ['All Files', '*'] ];
+        my $syx_file=$mw->getOpenFile(
+            -defaultextension => '.syx',
+            -filetypes        => $types,
+            -title            => 'Open a Korg Program Sysex Dump file'
+        );
+        if ($syx_file && -r $syx_file) {
+            open my $fh, '<', $syx_file;
+            my $tmp_dump = do { local $/; <$fh> };
+            close $fh;
+            my $check=PrgSysexValidate($tmp_dump);
+            if ($check ne 'ok') {
+                Error(\$mw,"Error while opening $syx_file\n\n$check");
+            } else {
+                PrgSysexRead(\$tmp_dump);
+                $modified=0;
+                $prgfilename=$syx_file;
+            }
+        } elsif ($syx_file) {
+            Error(\$mw, "Error: could not open $syx_file");
+        }
+    }
+}
+
+# call as: UnsavedChanges(\$parentwin, $question), returns: Yes/No
+sub UnsavedChanges {
+    my $win=$_[0];
+    my $msg=$_[1];
+    my $rtn=${$win}->messageBox(
+        -title   =>'Unsaved changes',
+        -icon    => 'question',
+        -message =>"There are unsaved changes that will be lost unless you save them first.\n\n$msg",
+        -type    =>'YesNo',
+        -default =>'No'
+    );
+    return $rtn;
+}
+
+# Error popup window
+sub Error {
+    my $win=$_[0];
+    my $msg=$_[1];
+    ${$win}->messageBox(
+        -title   =>'Error',
+        -icon    => 'warning',
+        -message =>"$msg",
+        -type    =>'Ok',
+        -default =>'Ok'
+    );
+}
+
+# 'About' information window
+sub About {
+    $mw->messageBox(
+        -title   => 'About',
+        -icon    => 'info',
+        -message => "        X Series Editor version $version\n
+for the Korg\x{2122} X5, 05R/W, X5D, X5DR\n
+         \x{00A9} 2012 LinuxTECH.NET\n\nKorg is a registered trademark of Korg Inc.",
+        -type    => 'Ok',
+        -default => 'Ok'
+    );
+}
+
+sub PrgSysexValidate {
+}
+
+sub PrgSysexRead {
 }
 
 sub MidiPortList {
@@ -790,3 +931,540 @@ sub VDF_Cutoff_Frame {
     ),-padx=>4);
 }
 
+#-------------------------------------------------------------------------------------------------------------------------
+# VDF EG
+
+sub VDF_EG_Frame {
+    my $osc=$_[0];
+
+    $f06[$osc]->Label(%TitleLbl_defaults, -text=> 'VDF EG'
+    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
+
+    my $subframe=$f06[$osc]->Frame(
+    )->pack(-fill=>'x', -expand=>1, -padx=>10, -pady=>5);
+
+# Attack Time
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_AT[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Attack Time',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_AT[$osc]
+    ),-padx=>4);
+
+# Attack Level
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_AL[$osc],
+        -to           =>  99,
+        -from         => -99,
+        -tickinterval =>  22,
+        -label        => 'Attack Level',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_AL[$osc]
+    ),-padx=>4);
+
+# Decay Time
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_DT[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Decay Time',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_DT[$osc]
+    ),-padx=>4);
+
+# Break Point
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_BP[$osc],
+        -to           =>  99,
+        -from         => -99,
+        -tickinterval =>  22,
+        -label        => 'Break Point',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_BP[$osc]
+    ),-padx=>4);
+
+# Slope Time
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_ST[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Slope Time',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_ST[$osc]
+    ),-padx=>4);
+
+# Sustain Level
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_SL[$osc],
+        -to           =>  99,
+        -from         => -99,
+        -tickinterval =>  22,
+        -label        => 'Sustain Level',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_SL[$osc]
+    ),-padx=>4);
+
+# Release Time
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_RT[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Release Time',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_RT[$osc]
+    ),-padx=>4);
+
+# Release Level
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_RL[$osc],
+        -to           =>  99,
+        -from         => -99,
+        -tickinterval =>  22,
+        -label        => 'Release Level',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_RL[$osc]
+    ),-padx=>4);
+
+}
+
+#-------------------------------------------------------------------------------------------------------------------------
+# VDF
+
+sub VDF_Frame {
+    my $osc=$_[0];
+
+    $f07[$osc]->Label(%TitleLbl_defaults, -text=> 'VDF'
+    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
+
+    my $subframe=$f07[$osc]->Frame(
+    )->pack(-fill=>'x', -expand=>1, -padx=>10, -pady=>5);
+
+# Keyboard Track Key
+    my $VDF_kbdtk_fn=$subframe->Frame()->grid(-columnspan=>2);
+
+    $VDF_kbdtk_fn->Label(-text=>'Keyboard Track Key: ', -font=>'Sans 8')->grid(
+    my $VDF_kbdtk_entry=$VDF_kbdtk_fn->BrowseEntry(%BEntry_defaults,
+        -variable     => \$VDF_kbdtk[$osc],
+        -choices      => \@notes,
+        -width        => 6,
+        -font         => 'Fixed 8',
+        -browsecmd    => sub{ SendPaChMsg(); }
+    ));
+    $VDF_kbdtk_entry->Subwidget("choices")->configure(%choices_defaults);
+    $VDF_kbdtk_entry->Subwidget("arrow")->configure(%arrow_defaults);
+
+# Cutoff Value
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDFcoffvl[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Cutoff Value',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDFcoffvl[$osc]
+    ),-padx=>4);
+
+# Cutoff Keyboard Track
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDFcoffkt[$osc],
+        -to           =>  99,
+        -from         => -99,
+        -tickinterval =>  22,
+        -label        => 'Cutoff Keyboard Track',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDFcoffkt[$osc]
+    ),-padx=>4);
+
+# EG Intensity
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_EGint[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'EG Intensity',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_EGint[$osc]
+    ),-padx=>4);
+
+# EG Time Keyboard Track
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_EGtkt[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'EG Time Keyboard Track',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_EGtkt[$osc]
+    ),-padx=>4);
+
+# EG Time Velocity Sense
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_EGtvs[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'EG Time Velocity Sense',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_EGtvs[$osc]
+    ),-padx=>4);
+
+# EG Intensity Velocity Sense
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDF_EGivs[$osc],
+        -to           =>  99,
+        -from         => -99,
+        -tickinterval =>  22,
+        -label        => 'EG Intensity Velocity Sense',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDF_EGivs[$osc]
+    ),-padx=>4);
+}
+
+#-------------------------------------------------------------------------------------------------------------------------
+# VDA EG
+
+sub VDA_EG_Frame {
+    my $osc=$_[0];
+
+    $f08[$osc]->Label(%TitleLbl_defaults, -text=> 'VDA EG'
+    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
+
+    my $subframe=$f08[$osc]->Frame(
+    )->pack(-fill=>'x', -expand=>1, -padx=>10, -pady=>5);
+
+# Attack Time
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDA_AT[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Attack Time',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDA_AT[$osc]
+    ),-padx=>4);
+
+# Attack Level
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDA_AL[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Attack Level',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDA_AL[$osc]
+    ),-padx=>4);
+
+# Decay Time
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDA_DT[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Decay Time',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDA_DT[$osc]
+    ),-padx=>4);
+
+# Break Point
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDA_BP[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Break Point',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDA_BP[$osc]
+    ),-padx=>4);
+
+# Slope Time
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDA_ST[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Slope Time',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDA_ST[$osc]
+    ),-padx=>4);
+
+# Sustain Level
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDA_SL[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Sustain Level',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDA_SL[$osc]
+    ),-padx=>4);
+
+# Release Time
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDA_RT[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Release Time',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDA_RT[$osc]
+    ),-padx=>4);
+}
+
+#-------------------------------------------------------------------------------------------------------------------------
+# VDA
+
+sub VDA_Frame {
+    my $osc=$_[0];
+
+    $f09[$osc]->Label(%TitleLbl_defaults, -text=> 'VDA'
+    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
+
+    my $subframe=$f09[$osc]->Frame(
+    )->pack(-fill=>'x', -expand=>1, -padx=>10, -pady=>5);
+
+# Keyboard Track Key
+    my $VDA_kbdtk_fn=$subframe->Frame()->grid(-columnspan=>2);
+
+    $VDA_kbdtk_fn->Label(-text=>'Keyboard Track Key: ', -font=>'Sans 8')->grid(
+    my $VDA_kbdtk_entry=$VDA_kbdtk_fn->BrowseEntry(%BEntry_defaults,
+        -variable     => \$VDA_kbdtk[$osc],
+        -choices      => \@notes,
+        -width        => 6,
+        -font         => 'Fixed 8',
+        -browsecmd    => sub{ SendPaChMsg(); }
+    ));
+    $VDA_kbdtk_entry->Subwidget("choices")->configure(%choices_defaults);
+    $VDA_kbdtk_entry->Subwidget("arrow")->configure(%arrow_defaults);
+
+# Oscillator Level
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDAosclv[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Oscillator Level',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDAosclv[$osc]
+    ),-padx=>4);
+
+# Amplifier Keyboard Tracking Intensity
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDAakti[$osc],
+        -to           =>  99,
+        -from         => -99,
+        -tickinterval =>  22,
+        -label        => 'Amplifier Keyboard Tracking Intensity',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDAakti[$osc]
+    ),-padx=>4);
+
+# Amplifier Velocity Sense
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDAavs[$osc],
+        -to           =>  99,
+        -from         => -99,
+        -tickinterval =>  22,
+        -label        => 'Amplifier Velocity Sense',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDAavs[$osc]
+    ),-padx=>4);
+
+# EG Time Keyboard Track
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDAegtkt[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'EG Time Keyboard Track',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDAegtkt[$osc]
+    ),-padx=>4);
+
+# EG Time Velocity Sense
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$VDAegtvs[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'EG Time Velocity Sense',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$VDAegtvs[$osc]
+    ),-padx=>4);
+
+}
+
+#-------------------------------------------------------------------------------------------------------------------------
+# Pitch Modulation
+
+sub Pitch_Mod {
+    my $osc=$_[0];
+
+    $f10[$osc]->Label(%TitleLbl_defaults, -text=> 'Pitch Modulation'
+    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
+
+    my $subframe=$f10[$osc]->Frame(
+    )->pack(-fill=>'x', -expand=>1, -padx=>10, -pady=>5);
+
+# Frequency
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$PMG_freq[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Frequency',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$PMG_freq[$osc]
+    ),-padx=>4);
+
+# Delay
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$PMG_dly[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Delay',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$PMG_dly[$osc]
+    ),-padx=>4);
+
+# Fade in
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$PMG_Fin[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Fade in',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$PMG_Fin[$osc]
+    ),-padx=>4);
+
+# Intensity
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$PMG_Int[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Intensity',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$PMG_Int[$osc]
+    ),-padx=>4);
+
+# Frequency Modulation by Keyboard Tracking
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$PMG_FMKT[$osc],
+        -to           =>  99,
+        -from         => -99,
+        -tickinterval =>  22,
+        -label        => 'Frequency Modulation by Keyboard Tracking',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$PMG_FMKT[$osc]
+    ),-padx=>4);
+
+# Intensity Modulation by Aftertouch
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$PMG_IMA[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Intensity Modulation by Aftertouch',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$PMG_IMA[$osc]
+    ),-padx=>4);
+
+# Intensity Modulation by Joystick
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$PMG_IMJ[$osc],
+        -to           =>  99,
+        -from         =>   0,
+        -tickinterval =>   9,
+        -label        => 'Intensity Modulation by Joystick',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$PMG_IMJ[$osc]
+    ),-padx=>4);
+
+# Frequency Modulation by AT + JS
+    $subframe->Scale(%Scale_defaults,
+        -variable     => \$PMG_FMAJ[$osc],
+        -to           =>   9,
+        -from         =>   0,
+        -tickinterval =>   1,
+        -label        => 'Frequency Modulation by AT + JS',
+        -command      => sub{ SendPaChMsg(); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -textvariable => \$PMG_FMAJ[$osc]
+    ),-padx=>4);
+
+}
