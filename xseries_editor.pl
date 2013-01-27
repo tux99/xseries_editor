@@ -31,6 +31,12 @@ use Tk::Optionmenu;
 use Tk::JPEG;
 use List::Util qw[min max];
 
+use MIDI::ALSA ('SND_SEQ_EVENT_PORT_UNSUBSCRIBED',
+                'SND_SEQ_EVENT_SYSEX');
+
+MIDI::ALSA::client("X Series Editor PID_$$",1,1,1);
+MIDI::ALSA::start();
+
 # LCD style background color
 my $LCDbg='#ECFFAF';
 # title strips background and font color
@@ -38,8 +44,8 @@ my $Titlebg='#487890';
 my $Titlefg='#F3F3F3';
 
 my %Scale_defaults=(
-    -width        => 10,
-    -length       => 200,
+    -width        => 8,
+    -length       => 180,
     -sliderlength => 16,
     -borderwidth  => 1,
     -showvalue    => 0,
@@ -87,9 +93,15 @@ my %Entry_defaults=(
     -selectborderwidth  => 0
 );
 my %TitleLbl_defaults=(
-        -font         => 'title',
-        -foreground   => $Titlefg,
-        -background   => $Titlebg
+    -font         => 'title',
+    -foreground   => $Titlefg,
+    -background   => $Titlebg
+);
+my %RadioB_defaults=(
+    -font        => 'Sans 8',
+    -indicatoron => 0,
+    -borderwidth => 1,
+    -selectcolor => $LCDbg
 );
 
 # down arrow bitmap for pulldown menu
@@ -244,7 +256,6 @@ my @X5D_drums=( @X5_drums,
 '209:Jung Gliss', '210:MalletLoop', '211:MouthHarp1', '212:MouthHrp1A', '213:MouthHarp2',
 '214:MouthHrp2A');
 
-
 # array mapping MIDI note numbers 0-127 to note names C-1 to G9
 my @notes;
 my @keys=('C ', 'C#', 'D ', 'D#', 'E ', 'F ', 'F#', 'G ', 'G#', 'A ', 'A#', 'B ');
@@ -281,6 +292,10 @@ my $VDFmod_wav;      my $VDFmgfreq;
 my $VDFmgint;        my $VDFmgdly;
 my $VDF_OSC1;        my $VDF_OSC2;
 my $VDFkeysync;
+# Misc OSC specific
+my @msound;          my @octave;
+my @PEG_Int;         my @ABPan;
+my @Csend_lvl;       my @Dsend_lvl;
 # VDF EG
 my @VDF_AT;          my @VDF_AL;
 my @VDF_DT;          my @VDF_BP;
@@ -290,7 +305,12 @@ my @VDF_RT;          my @VDF_RL;
 my @VDFcoffvl;       my @VDFcoffkt;
 my @VDF_EGint;       my @VDF_EGtkt;
 my @VDF_EGtvs;       my @VDF_EGivs;
-my @VDF_kbdtk;
+my @VDF_kbdtk;       my @VDFktmode;
+my @VDF_CoInt;       my @VDF_CoVSn;
+my @VDF_ATtv;        my @VDF_DTtv;
+my @VDF_STtv;        my @VDF_RTtv;
+my @VDF_ATtk;        my @VDF_DTtk;
+my @VDF_STtk;        my @VDF_RTtk;
 # VDA EG
 my @VDA_AT;          my @VDA_AL;
 my @VDA_DT;          my @VDA_BP;
@@ -300,6 +320,11 @@ my @VDA_RT;
 my @VDAosclv;        my @VDAakti;
 my @VDAavs;          my @VDAegtkt;
 my @VDAegtvs;        my @VDA_kbdtk;
+my @VDA_ATtv;        my @VDA_DTtv;
+my @VDA_STtv;        my @VDA_RTtv;
+my @VDA_ATtk;        my @VDA_DTtk;
+my @VDA_STtk;        my @VDA_RTtk;
+my @VDAktmode;
 # Pitch MG
 my @PMG_freq;        my @PMG_dly;
 my @PMG_Fin;         my @PMG_Int;
@@ -325,13 +350,17 @@ my $Aftertouch;
 my $Joystick;
 my $VDF_Cutoff;
 my @VDF;
+my @VDFvs;
+my @VDFkt;
 my @VDF_EG;
-my @VDA;
+my @VDAvs;
+my @VDAkt;
 my @VDA_EG;
 my @Main_Osc;
 my @Pitch_MG;
 my $combwin;
 my $midiupload;
+my $midi_settings;
 
 # default Korg device number (1-16)
 my $dev_nr=1;
@@ -408,21 +437,26 @@ MainLoop;
 # Main Tab
 sub Main_Tab {
     my($MainTab)=@_;
-    my $Col_1 =$$MainTab->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
-    my $Col_23=$$MainTab->Frame()->pack(-side=>'top',  -fill=>'x');
-    my $Col_2 =$$MainTab->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
-    my $Col_3 =$$MainTab->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
+    my $Col_1  =$$MainTab->Frame()->pack(-side=>'left',   -fill=>'y');
+    my $Col_2  =$$MainTab->Frame()->pack(-side=>'left',   -fill=>'y');
+    my $Col_34 =$$MainTab->Frame()->pack(-side=>'top',    -fill=>'both', -expand=>1);
+    my $Col_34b=$$MainTab->Frame()->pack(-side=>'bottom', -fill=>'both', -expand=>1);
+    my $Col_3  =$$MainTab->Frame()->pack(-side=>'left',   -fill=>'both', -expand=>1);
+    my $Col_4  =$$MainTab->Frame()->pack(-side=>'left',   -fill=>'both', -expand=>1);
 
-    $Main_Prg  =$Col_1->Frame(%Frame_defaults)->pack(-fill=>'x');
-    $Aftertouch=$Col_1->Frame(%Frame_defaults)->pack(-fill=>'x');
-    $VDF_Cutoff=$Col_2->Frame(%Frame_defaults)->pack(-fill=>'x');
-    $Joystick  =$Col_2->Frame(%Frame_defaults)->pack(-fill=>'x');
-    $Pitch_EG  =$Col_3->Frame(%Frame_defaults)->pack(-fill=>'x');
+    $Main_Prg  =$Col_1->Frame(%Frame_defaults)->pack();
+    $Pitch_EG  =$Col_2->Frame(%Frame_defaults)->pack();
+    $Aftertouch=$Col_1->Frame(%Frame_defaults)->pack();
+    $VDF_Cutoff=$Col_2->Frame(%Frame_defaults)->pack();
+    $Joystick  =$Col_1->Frame(%Frame_defaults)->pack();
 
     # photo of X5DR front panel (purely for decorative purposes)
-    my $jpg1=$Col_23->Photo( '-format'=>'jpeg', -file=>'x5dr.jpg');
-    $Col_23->Label(-image=>$jpg1, -borderwidth=>0, -relief=>'flat', -anchor=>'n',-height=>92
-    )->pack(-anchor=>'n', -fill=>'x', -ipadx=>2);
+    #my $jpg1=$Col_34->Photo('-format'=>'jpeg', -file=>'x5dr.jpg');
+    #$Col_34->Label(-image=>$jpg1, -borderwidth=>0, -anchor=>'n',-height=>92
+    #)->pack(-anchor=>'n', -fill=>'x', -ipadx=>2);
+
+    $midi_settings=$Col_34b->Frame(%Frame_defaults)->pack(-side=>'bottom',-fill=>'x');
+    MIDI_IOconfig();
 
     Main_Prg_Frame();
     Aftertouch_Frame();
@@ -438,20 +472,27 @@ sub Osc_Tabs {
         my $Col_1=${$OscTab[$n]}->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
         my $Col_2=${$OscTab[$n]}->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
         my $Col_3=${$OscTab[$n]}->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
+        my $Col_4=${$OscTab[$n]}->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
 
-        $Main_Osc[$n]=$Col_1->Frame(%Frame_defaults)->pack(-fill=>'x');
-        $Pitch_MG[$n]=$Col_1->Frame(%Frame_defaults)->pack(-fill=>'x');
-        $VDF[$n]     =$Col_2->Frame(%Frame_defaults)->pack(-fill=>'x');
-        $VDF_EG[$n]  =$Col_2->Frame(%Frame_defaults)->pack(-fill=>'x');
-        $VDA[$n]     =$Col_3->Frame(%Frame_defaults)->pack(-fill=>'x');
-        $VDA_EG[$n]  =$Col_3->Frame(%Frame_defaults)->pack(-fill=>'x');
+        $Main_Osc[$n]=$Col_1->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1);
+        $VDF_EG[$n]  =$Col_2->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1);
+        $VDA_EG[$n]  =$Col_3->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1);
+        $Pitch_MG[$n]=$Col_4->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1);
+        $VDF[$n]     =$Col_1->Frame(%Frame_defaults)->pack(-fill=>'x');
+        $VDFvs[$n]   =$Col_1->Frame(%Frame_defaults)->pack(-fill=>'x');
+        $VDFkt[$n]   =$Col_2->Frame(%Frame_defaults)->pack(-fill=>'x');
+        $VDAvs[$n]   =$Col_4->Frame(%Frame_defaults)->pack(-fill=>'x');
+        $VDAkt[$n]   =$Col_3->Frame(%Frame_defaults)->pack(-fill=>'x');
 
         Main_Osc_Frame($n);
         Pitch_MG_Frame($n);
         VDF_EG_Frame($n);
         VDF_Frame($n);
+        VDFvs_Frame($n);
+        VDFkt_Frame($n);
         VDA_EG_Frame($n);
-        VDA_Frame($n);
+        VDAvs_Frame($n);
+        VDAkt_Frame($n);
     }
 }
 
@@ -603,12 +644,71 @@ sub PrgSysexValidate {
 sub PrgSysexRead {
 }
 
-sub MidiPortList {
-}
-
+# send Program Parameter Change Messages
 sub SendPaChMsg {
     my($param,$value)=@_;
     print STDOUT "par:[$param] val:[$value]\n";
+    if ($midi_outdev ne '') {
+        if ($value<0){ $value=$value+16384; }
+        my $val_msb=chr(int($value/128));
+        my $val_lsb=chr($value%128);
+        my $par_msb=chr(int($param/128));
+        my $par_lsb=chr($param%128);
+        # switch to Program Edit mode
+        my $modech="\x42".chr($dev_nr-1+48)."\x36\x4E\x03\x00";
+        MIDI::ALSA::output( MIDI::ALSA::sysex( $dev_nr-1, $modech, 0 ) );
+        # send Program Parameter Change message
+        my $ddata="\x42".chr($dev_nr-1+48)."\x36\x41".$par_lsb.$par_msb.$val_lsb.$val_msb;
+        MIDI::ALSA::output( MIDI::ALSA::sysex( $dev_nr-1, $ddata, 0 ) );
+    }
+}
+
+# create an array of available midi ports
+sub MidiPortList {
+    my($dir)=@_;
+    my @portlist;
+    my %clients = MIDI::ALSA::listclients();
+    my %portnrs = MIDI::ALSA::listnumports();
+    my $tmp=0;
+    while (my ($key, $value) = each(%clients)){
+        if ($key>15 && $key<128) {
+            for (my $i=0; $i<($portnrs{$key}); $i++) {
+                $portlist[$tmp]=$value.":".$i;
+                $tmp++;
+            }
+        }
+    }
+    return @portlist;
+}
+
+# set up a new midi connection and drop the previous one
+sub MidiConSetup {
+    my($dir)=@_;
+    MIDI::ALSA::stop();
+    if ($dir eq 'out') {
+        if ($midi_outdev_prev ne '') {
+            MIDI::ALSA::disconnectto(1,"$midi_outdev_prev");
+        }
+        $midi_outdev_prev=$midi_outdev;
+        MIDI::ALSA::connectto(1,"$midi_outdev");
+    } elsif ($dir eq 'in') {
+        if ($midi_indev_prev ne '') {
+            MIDI::ALSA::disconnectfrom(0,"$midi_indev_prev");
+        }
+        $midi_indev_prev=$midi_indev;
+        MIDI::ALSA::connectfrom(0,"$midi_indev");
+    }
+    MIDI::ALSA::start();
+    if (($midi_indev ne '') && ($midi_outdev ne '')) {
+    #    $vcdwn_btn->configure(-state=>'active');
+    } else {
+    #    $vcdwn_btn->configure(-state=>'disabled');
+    }
+    if ($midi_outdev ne '') {
+        $midiupload->configure(-state=>'active');
+    } else {
+        $midiupload->configure(-state=>'disabled');
+    }
 }
 
 # Decodes a block of up to 7+1 7bit bytes as used by Korg sysex dumps
@@ -692,6 +792,32 @@ sub StdSlider {
     ),-padx=>4);
 }
 
+# Direction Switch
+sub DirSwitch {
+    my($frame,$var,$parm,$desc)=@_;
+
+    $$frame->Label(-text=>$desc, -font=>'Sans 8')->pack(-side=>'left');
+    my @label=(['-','-1'],['0','0'],['+','1']);
+    for (my $n=0;$n<=2;$n++) {
+        $$frame->Radiobutton(%RadioB_defaults,
+            -text     => $label[$n][0],
+            -width    => 1,
+            -value    => $label[$n][1],
+            -variable => $var,
+            -command  => sub{ SendPaChMsg($parm,$$var); }
+        )->pack(-side=>'left', -pady=>4);
+    }
+}
+
+# Standard subframe with header, returns subframe created
+sub StdFrame {
+    my($frame,$title)=@_;
+    $$frame->Label(%TitleLbl_defaults, -text=>$title)->pack(-fill=>'x', -expand=>1, -anchor=>'n');
+    my $subframe=$$frame->Frame()->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
+    return $subframe;
+}
+
+# initialise all Program values
 sub newProgram {
     $modified=0;
     $prgfilename='';
@@ -718,6 +844,12 @@ sub newProgram {
     $VDFkeysync=0;
 
     for (my $osc=0; $osc<=1; $osc++) {
+        $msound[$osc]='000:A.Piano 1';
+        $octave[$osc]=0;
+        $PEG_Int[$osc]=0;
+        $ABPan[$osc]=15;
+        $Csend_lvl[$osc]=0;
+        $Dsend_lvl[$osc]=0;
         # VDF EG
         $VDF_AT[$osc]=0;          $VDF_AL[$osc]=0;
         $VDF_DT[$osc]=0;          $VDF_BP[$osc]=0;
@@ -727,16 +859,26 @@ sub newProgram {
         $VDFcoffvl[$osc]=0;       $VDFcoffkt[$osc]=0;
         $VDF_EGint[$osc]=0;       $VDF_EGtkt[$osc]=0;
         $VDF_EGtvs[$osc]=0;       $VDF_EGivs[$osc]=0;
-        $VDF_kbdtk[$osc]='C 4';
+        $VDF_kbdtk[$osc]='C 4';   $VDFktmode[$osc]=0;
+        $VDF_CoInt[$osc]=0;       $VDF_CoVSn[$osc]=0;
+        $VDF_ATtv[$osc]=0;        $VDF_DTtv[$osc]=0;
+        $VDF_STtv[$osc]=0;        $VDF_RTtv[$osc]=0;
+        $VDF_ATtk[$osc]=0;        $VDF_DTtk[$osc]=0;
+        $VDF_STtk[$osc]=0;        $VDF_RTtk[$osc]=0;
         # VDA EG
         $VDA_AT[$osc]=0;          $VDA_AL[$osc]=0;
         $VDA_DT[$osc]=0;          $VDA_BP[$osc]=0;
         $VDA_ST[$osc]=0;          $VDA_SL[$osc]=0;
         $VDA_RT[$osc]=0;
         # VDA
-        $VDAosclv[$osc]=0;        $VDAakti[$osc]=0;
+        $VDAosclv[$osc]=90;       $VDAakti[$osc]=0;
         $VDAavs[$osc]=0;          $VDAegtkt[$osc]=0;
         $VDAegtvs[$osc]=0;        $VDA_kbdtk[$osc]='C 4';
+        $VDAktmode[$osc]=0;
+        $VDA_ATtv[$osc]=0;        $VDA_DTtv[$osc]=0;
+        $VDA_STtv[$osc]=0;        $VDA_RTtv[$osc]=0;
+        $VDA_ATtk[$osc]=0;        $VDA_DTtk[$osc]=0;
+        $VDA_STtk[$osc]=0;        $VDA_RTtk[$osc]=0;
         # Pitch MG
         $PMG_freq[$osc]=0;        $PMG_dly[$osc]=0;
         $PMG_Fin[$osc]=0;         $PMG_Int[$osc]=0;
@@ -745,19 +887,74 @@ sub newProgram {
         $PMGmod_wav[$osc]=0;      $PMGkeysync[$osc]=0;
     }
 }
+
+#-------------------------------------------------------------------------------------------------------------------------
+# MIDI input and output devices selection
+
+sub MIDI_IOconfig {
+
+    $midi_settings->Label(%TitleLbl_defaults, -text=> 'MIDI Devices Configuration'
+    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
+
+    my $subframe=$midi_settings->Frame(
+    )->pack(-fill=>'x', -expand=>1, -pady=>14);
+
+# MIDI OUT device selection
+    $subframe->Label(
+        -text         => "Output MIDI Device to Korg: ",
+        -font         => 'Sans 9',
+        -justify      => 'right'
+    )->grid(-row=>0, -column=>0, -sticky=>'e', -pady=>8);
+
+    $midiout=$subframe->BrowseEntry(%BEntry_defaults,
+        -variable     => \$midi_outdev,
+        -choices      => \@midi_outdevs,
+        -font         => 'Sans 9',
+        -width        => 28,
+        -listheight   => 9,
+        -browsecmd    => sub{ MidiConSetup('out'); },
+        -listcmd      => sub{ @midi_outdevs=MidiPortList('out');
+                              $midiout->delete( 0, "end" );
+                              $midiout->insert("end", $_) for (@midi_outdevs); }
+    )->grid(-row=>0, -column=>1, -sticky=>'w', -pady=>8);
+
+    $midiout->Subwidget("choices")->configure(%choices_defaults);
+    $midiout->Subwidget("arrow")->configure(%arrow_defaults);
+
+
+# MIDI IN device selection
+    $subframe->Label(
+        -text         => "Input MIDI Device from Korg: ",
+        -font         => 'Sans 9',
+        -justify      => 'right'
+    )->grid(-row=>1, -column=>0, -sticky=>'e', -pady=>8);
+
+    $midiin=$subframe->BrowseEntry(%BEntry_defaults,
+        -variable     => \$midi_indev,
+        -choices      => \@midi_indevs,
+        -font         => 'Sans 9',
+        -width        => 28,
+        -listheight   => 9,
+        -browsecmd    => sub{ MidiConSetup('in'); },
+        -listcmd      => sub{ @midi_indevs=MidiPortList('in');
+                              $midiin->delete( 0, "end" );
+                              $midiin->insert("end", $_) for (@midi_indevs); }
+    )->grid(-row=>1, -column=>1, -sticky=>'w', -pady=>8);
+
+    $midiin->Subwidget("choices")->configure(%choices_defaults);
+    $midiin->Subwidget("arrow")->configure(%arrow_defaults);
+
+}
+
 #-------------------------------------------------------------------------------------------------------------------------
 # Main Program Editor Frame
 
 sub Main_Prg_Frame {
 
-    $Main_Prg->Label(%TitleLbl_defaults, -text=> 'Main Program Parameters'
-    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
-
-    my $subframe=$Main_Prg->Frame(
-    )->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
+    my $subframe=StdFrame(\$Main_Prg,'Main Program Parameters');
 
 # Program Name
-    my $pname=$subframe->Frame()->grid(-columnspan=>2, -pady=>5);
+    my $pname=$subframe->Frame()->grid(-columnspan=>2);
 
     $pname->Label(-text=>'Program Name: ', -font=>'Sans 10')->grid(
     $pname->Entry(%Entry_defaults,
@@ -800,7 +997,7 @@ sub Main_Prg_Frame {
     }
 
 # Hold
-    $asshldf->Label(-text=>'    Hold: ', -font=>'Sans 8')->pack(-side=>'left');
+    $asshldf->Label(-text=>'  Hold: ', -font=>'Sans 8')->pack(-side=>'left');
     $asshldf->Checkbutton(
         -text         => 'on/off',
         -font         => 'Sans 8',
@@ -809,67 +1006,45 @@ sub Main_Prg_Frame {
     )->pack(-side=>'left');
 
 # Sliders
-    StdSlider(\$subframe, \$interval, -12, 12,  2, 1, 88, 'Osc2 Pitch Interval');
+    StdSlider(\$subframe, \$interval, -12, 12,  3, 1, 88, 'Osc1 / Osc2 Pitch Interval');
     StdSlider(\$subframe, \$detune,   -50, 50, 10, 1, 89, 'Detune Osc1 / Osc2');
-    StdSlider(\$subframe, \$delay,      0, 99, 11, 1, 90, 'Delay Osc2 Start');
-
+    StdSlider(\$subframe, \$delay,      0, 99, 11, 1, 90, 'Delay Osc2 Start (ms)');
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
 # Pitch EG Frame
 
 sub Pitch_EG_Frame {
-
-    $Pitch_EG->Label(%TitleLbl_defaults, -text=> 'Pitch Envelope Generator'
-    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
-
-    my $subframe=$Pitch_EG->Frame(
-    )->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
-
+    my $subframe=StdFrame(\$Pitch_EG,'Pitch Envelope Generator');
     StdSlider(\$subframe, \$PEG_SL,    -99, 99, 22, 1,  3, 'Start Level');
     StdSlider(\$subframe, \$PEG_AT,      0, 99, 11, 1,  4, 'Attack Time');
     StdSlider(\$subframe, \$PEG_AL,    -99, 99, 22, 1,  5, 'Attack Level');
     StdSlider(\$subframe, \$PEG_DT,      0, 99, 11, 1,  6, 'Decay Time');
     StdSlider(\$subframe, \$PEG_RT,      0, 99, 11, 1,  7, 'Release Time');
     StdSlider(\$subframe, \$PEG_RL,    -99, 99, 22, 1,  8, 'Release Level');
-    StdSlider(\$subframe, \$PEG_level, -99, 99, 22, 1,  9, 'EG Level Velocity Sensitivity');
-    StdSlider(\$subframe, \$PEG_time,  -99, 99, 22, 1, 10, 'EG Time Velocity Sensitivity');
-
+    StdSlider(\$subframe, \$PEG_level, -99, 99, 22, 1,  9, 'PEG Level Velocity Sensitivity');
+    StdSlider(\$subframe, \$PEG_time,  -99, 99, 22, 1, 10, 'PEG Time Velocity Sensitivity');
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
 # Aftertouch Frame
 
 sub Aftertouch_Frame {
-
-    $Aftertouch->Label(%TitleLbl_defaults, -text=> 'Aftertouch'
-    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
-
-    my $subframe=$Aftertouch->Frame(
-    )->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
-
+    my $subframe=StdFrame(\$Aftertouch,'Aftertouch');
     StdSlider(\$subframe, \$AT_PBrange, -12, 12,  2, 1, 17, 'Pitch Bend Range');
     StdSlider(\$subframe, \$AT_VDFcoff, -99, 99, 22, 1, 18, 'VDF Cutoff Frequency');
     StdSlider(\$subframe, \$AT_VDFmgint,  0, 99, 11, 1, 19, 'VDF Modulation Intensity');
     StdSlider(\$subframe, \$AT_VDAamp,  -99, 99, 22, 1, 20, 'VDA Amplitude');
-
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
 # Joystick Frame
 
 sub Joystick_Frame {
-
-    $Joystick->Label(%TitleLbl_defaults, -text=> 'Joystick'
-    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
-
-    my $subframe=$Joystick->Frame(
-    )->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
-
+    my $subframe=StdFrame(\$Joystick,'Joystick');
     StdSlider(\$subframe, \$JS_PBrange,  -12, 12,  2, 1, 22, 'Pitch Bend Range');
     StdSlider(\$subframe, \$JS_VDFswint, -99, 99, 22, 1, 23, 'VDF Sweep Intensity');
     StdSlider(\$subframe, \$JS_VDFmgint,   0, 99, 11, 1, 21, 'VDF Modulation Intensity');
-
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -877,11 +1052,7 @@ sub Joystick_Frame {
 
 sub VDF_Cutoff_Frame {
 
-    $VDF_Cutoff->Label(%TitleLbl_defaults, -text=> 'VDF Cutoff Modulation'
-    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
-
-    my $subframe=$VDF_Cutoff->Frame(
-    )->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
+    my $subframe=StdFrame(\$VDF_Cutoff,'VDF Cutoff Modulation');
 
 # Modulation Waveform
     my $modwavf=$subframe->Frame()->grid(-columnspan=>2);
@@ -889,9 +1060,9 @@ sub VDF_Cutoff_Frame {
     $modwavf->Label(-text=>'Modulation Waveform:', -font=>'Sans 8')->grid(-row=>0, -columnspan=>6);;
     my @modwavlabel=('tri', "saw\x{2191}", "saw\x{2193}", 'sq1', 'rnd', 'sq2');
     for (my $n=0;$n<=5;$n++) {
-        $modwavf->Radiobutton(
+        $modwavf->Radiobutton(%RadioB_defaults,
             -text     => $modwavlabel[$n],
-            -font     => 'Sans 8',
+            -width    => 5,
             -value    => $n,
             -variable => \$VDFmod_wav,
             -command  => sub{ SendPaChMsg(11,$VDFmod_wav); }
@@ -901,23 +1072,23 @@ sub VDF_Cutoff_Frame {
 # OSC1 Modulation Enable
     my $vdfmodf=$subframe->Frame()->grid(-columnspan=>2);
 
-    $vdfmodf->Label(-text=>'  Osc1 enable:', -font=>'Sans 8')->pack(-side=>'left');
+    $vdfmodf->Label(-text=>' Osc1 ena:', -font=>'Sans 8')->pack(-side=>'left');
     $vdfmodf->Checkbutton(
         -font         => 'Sans 8',
         -variable     => \$VDF_OSC1,
-        -command      => sub{ SendPaChMsg(15,$VDF_OSC1); }
+        -command      => sub{ SendPaChMsg(15,$VDF_OSC1+(2*$VDF_OSC2)); }
     )->pack(-side=>'left');
 
 # OSC2 Modulation Enable
-    $vdfmodf->Label(-text=>'  Osc2 enable:', -font=>'Sans 8')->pack(-side=>'left');
+    $vdfmodf->Label(-text=>' Osc2 ena:', -font=>'Sans 8')->pack(-side=>'left');
     $vdfmodf->Checkbutton(
         -font         => 'Sans 8',
         -variable     => \$VDF_OSC2,
-        -command      => sub{ SendPaChMsg(15,$VDF_OSC2); }
+        -command      => sub{ SendPaChMsg(15,$VDF_OSC1+(2*$VDF_OSC2)); }
     )->pack(-side=>'left');
 
 # Key Sync
-    $vdfmodf->Label(-text=>'  Key Sync:', -font=>'Sans 8')->pack(-side=>'left');
+    $vdfmodf->Label(-text=>' Key Sync:', -font=>'Sans 8')->pack(-side=>'left');
     $vdfmodf->Checkbutton(
         -font         => 'Sans 8',
         -variable     => \$VDFkeysync,
@@ -928,7 +1099,6 @@ sub VDF_Cutoff_Frame {
     StdSlider(\$subframe, \$VDFmgfreq, 0, 99, 11, 1, 12, 'VDF Modulation Frequency');
     StdSlider(\$subframe, \$VDFmgint,  0, 99, 11, 1, 13, 'VDF Modulation Intensity');
     StdSlider(\$subframe, \$VDFmgdly,  0, 99, 11, 1, 14, 'VDF Modulation Delay');
-
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -936,22 +1106,15 @@ sub VDF_Cutoff_Frame {
 
 sub VDF_EG_Frame {
     my($osc)=@_;
-
-    $VDF_EG[$osc]->Label(%TitleLbl_defaults, -text=> 'VDF Envelope Generator'
-    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
-
-    my $subframe=$VDF_EG[$osc]->Frame(
-    )->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
-
-    StdSlider(\$subframe, \$VDF_AT[$osc],   0, 99, 11, 1, (35+($osc*67)), 'Attack Time');
-    StdSlider(\$subframe, \$VDF_AL[$osc], -99, 99, 22, 1, (36+($osc*67)), 'Attack Level');
-    StdSlider(\$subframe, \$VDF_DT[$osc],   0, 99, 11, 1, (37+($osc*67)), 'Decay Time');
-    StdSlider(\$subframe, \$VDF_BP[$osc], -99, 99, 22, 1, (38+($osc*67)), 'Break Point');
-    StdSlider(\$subframe, \$VDF_ST[$osc],   0, 99, 11, 1, (39+($osc*67)), 'Slope Time');
-    StdSlider(\$subframe, \$VDF_SL[$osc], -99, 99, 22, 1, (40+($osc*67)), 'Sustain Level');
-    StdSlider(\$subframe, \$VDF_RT[$osc],   0, 99, 11, 1, (41+($osc*67)), 'Release Time');
-    StdSlider(\$subframe, \$VDF_RL[$osc], -99, 99, 22, 1, (42+($osc*67)), 'Release Level');
-
+    my $subframe=StdFrame(\$VDF_EG[$osc],'VDF'.($osc+1).' Envelope Generator');
+    StdSlider(\$subframe, \$VDF_AT[$osc],   0, 99, 11, 1, (35+($osc*67)), 'AT - Attack Time');
+    StdSlider(\$subframe, \$VDF_AL[$osc], -99, 99, 22, 1, (36+($osc*67)), 'AL - Attack Level');
+    StdSlider(\$subframe, \$VDF_DT[$osc],   0, 99, 11, 1, (37+($osc*67)), 'DT - Decay Time');
+    StdSlider(\$subframe, \$VDF_BP[$osc], -99, 99, 22, 1, (38+($osc*67)), 'BP - Break Point');
+    StdSlider(\$subframe, \$VDF_ST[$osc],   0, 99, 11, 1, (39+($osc*67)), 'ST - Slope Time');
+    StdSlider(\$subframe, \$VDF_SL[$osc], -99, 99, 22, 1, (40+($osc*67)), 'SL - Sustain Level');
+    StdSlider(\$subframe, \$VDF_RT[$osc],   0, 99, 11, 1, (41+($osc*67)), 'RT - Release Time');
+    StdSlider(\$subframe, \$VDF_RL[$osc], -99, 99, 22, 1, (42+($osc*67)), 'RL - Release Level');
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -959,12 +1122,34 @@ sub VDF_EG_Frame {
 
 sub VDF_Frame {
     my($osc)=@_;
+    my $subframe=StdFrame(\$VDF[$osc],'VDF'.($osc+1));
+    StdSlider(\$subframe, \$VDFcoffvl[$osc],   0, 99, 11, 1, (31+($osc*67)), 'Cutoff Frequency');
+    StdSlider(\$subframe, \$VDF_EGint[$osc],   0, 99, 11, 1, (32+($osc*67)), 'EG Intensity');
+    StdSlider(\$subframe, \$VDF_CoInt[$osc],   0, 99, 11, 1, (33+($osc*67)), 'Color Intensity');
+}
 
-    $VDF[$osc]->Label(%TitleLbl_defaults, -text=> 'VDF'
-    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
+#-------------------------------------------------------------------------------------------------------------------------
+# VDF Velocity Sensitivity Frame
 
-    my $subframe=$VDF[$osc]->Frame(
-    )->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
+sub VDFvs_Frame {
+    my($osc)=@_;
+    my $subframe=StdFrame(\$VDFvs[$osc],'VDF'.($osc+1).' Velocity Sensitivity');
+    StdSlider(\$subframe, \$VDF_CoVSn[$osc], -99, 99, 22, 1, (34+($osc*67)), 'VDF'.($osc+1).' Color Velocity Sensitivity');
+    StdSlider(\$subframe, \$VDF_EGivs[$osc], -99, 99, 22, 1, (43+($osc*67)), 'VDF'.($osc+1).' EG Intensity Velocity Sensitivity');
+    StdSlider(\$subframe, \$VDF_EGtvs[$osc],   0, 99, 11, 1, (44+($osc*67)), 'VDF'.($osc+1).' EG Time Velocity Sensitivity');
+    my $tmpf1=$subframe->Frame()->grid(-columnspan=>2);
+    DirSwitch(\$tmpf1, \$VDF_ATtv[$osc], (45+($osc*67)), 'AT:');
+    DirSwitch(\$tmpf1, \$VDF_DTtv[$osc], (46+($osc*67)), 'DT:');
+    DirSwitch(\$tmpf1, \$VDF_STtv[$osc], (47+($osc*67)), 'ST:');
+    DirSwitch(\$tmpf1, \$VDF_RTtv[$osc], (48+($osc*67)), 'RT:');
+}
+
+#-------------------------------------------------------------------------------------------------------------------------
+# VDF Keyboard Tracking Frame
+
+sub VDFkt_Frame {
+    my($osc)=@_;
+    my $subframe=StdFrame(\$VDFkt[$osc],'VDF'.($osc+1).' Keyboard Tracking');
 
 # Keyboard Track Key
     my $VDF_kbdtk_fn=$subframe->Frame()->grid(-columnspan=>2);
@@ -973,21 +1158,38 @@ sub VDF_Frame {
     my $VDF_kbdtk_entry=$VDF_kbdtk_fn->BrowseEntry(%BEntry_defaults,
         -variable     => \$VDF_kbdtk[$osc],
         -choices      => \@notes,
-        -width        => 6,
+        -width        => 5,
         -font         => 'Fixed 8',
         -browsecmd    => sub{ SendPaChMsg((49+($osc*67)),$noteshash{$VDF_kbdtk[$osc]}); }
-    ));
+    ), -pady=>4);
     $VDF_kbdtk_entry->Subwidget("choices")->configure(%choices_defaults);
     $VDF_kbdtk_entry->Subwidget("arrow")->configure(%arrow_defaults);
 
-# Sliders
-    StdSlider(\$subframe, \$VDFcoffvl[$osc],   0, 99, 11, 1, (31+($osc*67)), 'Cutoff Value');
-    StdSlider(\$subframe, \$VDFcoffkt[$osc], -99, 99, 22, 1, (51+($osc*67)), 'Cutoff Keyboard Track');
-    StdSlider(\$subframe, \$VDF_EGint[$osc],   0, 99, 11, 1, (32+($osc*67)), 'EG Intensity');
-    StdSlider(\$subframe, \$VDF_EGtkt[$osc],   0, 99, 11, 1, (52+($osc*67)), 'EG Time Keyboard Track');
-    StdSlider(\$subframe, \$VDF_EGtvs[$osc],   0, 99, 11, 1, (44+($osc*67)), 'EG Time Velocity Sense');
-    StdSlider(\$subframe, \$VDF_EGivs[$osc], -99, 99, 22, 1, (43+($osc*67)), 'EG Intensity Velocity Sense');
+# Keyboard Track Mode
+    my $ktmodef=$subframe->Frame()->grid(-columnspan=>2);
 
+    $ktmodef->Label(-text=>'Mode:', -font=>'Sans 8')->grid(-row=>0, -column=>0);
+    my @ktmodelabel=('off','low','high','all');
+    for (my $n=0;$n<=3;$n++) {
+        $ktmodef->Radiobutton(
+            -text     => $ktmodelabel[$n],
+            -font     => 'Fixed 8',
+            -value    => $n,
+            -variable => \$VDFktmode[$osc],
+            -command  => sub{ SendPaChMsg((50+($osc*67)),$VDFktmode[$osc]); }
+        )->grid(-row=>0, -column=>$n+1);
+    }
+
+# Sliders
+    StdSlider(\$subframe, \$VDFcoffkt[$osc], -99, 99, 22, 1, (51+($osc*67)), 'Cutoff Keyboard Tracking Intensity');
+    StdSlider(\$subframe, \$VDF_EGtkt[$osc],   0, 99, 11, 1, (52+($osc*67)), 'VDF'.($osc+1).' EG Time Keyboard Tracking');
+
+# Direction switches
+    my $tmpf2=$subframe->Frame()->grid(-columnspan=>2);
+    DirSwitch(\$tmpf2, \$VDF_ATtk[$osc], (53+($osc*67)), 'AT:');
+    DirSwitch(\$tmpf2, \$VDF_DTtk[$osc], (54+($osc*67)), 'DT:');
+    DirSwitch(\$tmpf2, \$VDF_STtk[$osc], (55+($osc*67)), 'ST:');
+    DirSwitch(\$tmpf2, \$VDF_RTtk[$osc], (56+($osc*67)), 'RT:');
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -995,56 +1197,82 @@ sub VDF_Frame {
 
 sub VDA_EG_Frame {
     my($osc)=@_;
-
-    $VDA_EG[$osc]->Label(%TitleLbl_defaults, -text=> 'VDA Envelope Generator'
-    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
-
-    my $subframe=$VDA_EG[$osc]->Frame(
-    )->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
-
-    StdSlider(\$subframe, \$VDA_AT[$osc],   0, 99, 11, 1, (57+($osc*67)), 'Attack Time');
-    StdSlider(\$subframe, \$VDA_AL[$osc],   0, 99, 11, 1, (58+($osc*67)), 'Attack Level');
-    StdSlider(\$subframe, \$VDA_DT[$osc],   0, 99, 11, 1, (59+($osc*67)), 'Decay Time');
-    StdSlider(\$subframe, \$VDA_BP[$osc],   0, 99, 11, 1, (60+($osc*67)), 'Break Point');
-    StdSlider(\$subframe, \$VDA_ST[$osc],   0, 99, 11, 1, (61+($osc*67)), 'Slope Time');
-    StdSlider(\$subframe, \$VDA_SL[$osc],   0, 99, 11, 1, (62+($osc*67)), 'Sustain Level');
-    StdSlider(\$subframe, \$VDA_RT[$osc],   0, 99, 11, 1, (63+($osc*67)), 'Release Time');
-
+    my $subframe=StdFrame(\$VDA_EG[$osc],'VDA'.($osc+1).' Envelope Generator');
+    StdSlider(\$subframe, \$VDAosclv[$osc], 0, 99, 11, 1, (25+($osc*67)), 'Oscillator Level');
+    StdSlider(\$subframe, \$VDA_AT[$osc],   0, 99, 11, 1, (57+($osc*67)), 'AT - Attack Time');
+    StdSlider(\$subframe, \$VDA_AL[$osc],   0, 99, 11, 1, (58+($osc*67)), 'AL - Attack Level');
+    StdSlider(\$subframe, \$VDA_DT[$osc],   0, 99, 11, 1, (59+($osc*67)), 'DT - Decay Time');
+    StdSlider(\$subframe, \$VDA_BP[$osc],   0, 99, 11, 1, (60+($osc*67)), 'BP - Break Point');
+    StdSlider(\$subframe, \$VDA_ST[$osc],   0, 99, 11, 1, (61+($osc*67)), 'ST - Slope Time');
+    StdSlider(\$subframe, \$VDA_SL[$osc],   0, 99, 11, 1, (62+($osc*67)), 'SL - Sustain Level');
+    StdSlider(\$subframe, \$VDA_RT[$osc],   0, 99, 11, 1, (63+($osc*67)), 'RT - Release Time');
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
-# VDA (Variable Digital Amplifier) Frame
+# VDA Velocity Sensitivity Frame
 
-sub VDA_Frame {
+sub VDAvs_Frame {
     my($osc)=@_;
+    my $subframe=StdFrame(\$VDAvs[$osc],'VDA'.($osc+1).' Velocity Sensitivity');
 
-    $VDA[$osc]->Label(%TitleLbl_defaults, -text=> 'VDA'
-    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
+# Sliders
+    StdSlider(\$subframe, \$VDAavs[$osc],   -99, 99, 22, 1, (64+($osc*67)), 'VDA'.($osc+1).' EG Level Velocity Sensitivity');
+    StdSlider(\$subframe, \$VDAegtvs[$osc],   0, 99, 11, 1, (65+($osc*67)), 'VDA'.($osc+1).' EG Time Velocity Sensitivity');
 
-    my $subframe=$VDA[$osc]->Frame(
-    )->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
+# Direction switches
+    my $tmpf1=$subframe->Frame()->grid(-columnspan=>2);
+    DirSwitch(\$tmpf1, \$VDA_ATtv[$osc], (66+($osc*67)), 'AT:');
+    DirSwitch(\$tmpf1, \$VDA_DTtv[$osc], (67+($osc*67)), 'DT:');
+    DirSwitch(\$tmpf1, \$VDA_STtv[$osc], (68+($osc*67)), 'ST:');
+    DirSwitch(\$tmpf1, \$VDA_RTtv[$osc], (69+($osc*67)), 'RT:');
+}
+
+#-------------------------------------------------------------------------------------------------------------------------
+# VDA Keyboard Tracking Frame
+
+sub VDAkt_Frame {
+    my($osc)=@_;
+    my $subframe=StdFrame(\$VDAkt[$osc],'VDA'.($osc+1).' Keyboard Tracking');
 
 # Keyboard Track Key
-    my $VDA_kbdtk_fn=$subframe->Frame()->grid(-columnspan=>2);
+    my $tmpf1=$subframe->Frame()->grid(-columnspan=>2);
 
-    $VDA_kbdtk_fn->Label(-text=>'Keyboard Track Key: ', -font=>'Sans 8')->grid(
-    my $VDA_kbdtk_entry=$VDA_kbdtk_fn->BrowseEntry(%BEntry_defaults,
+    $tmpf1->Label(-text=>'Keyboard Track Key: ', -font=>'Sans 8')->grid(
+    my $VDA_kbdtk_entry=$tmpf1->BrowseEntry(%BEntry_defaults,
         -variable     => \$VDA_kbdtk[$osc],
         -choices      => \@notes,
-        -width        => 6,
+        -width        => 5,
         -font         => 'Fixed 8',
         -browsecmd    => sub{ SendPaChMsg((70+($osc*67)),$noteshash{$VDA_kbdtk[$osc]}); }
-    ));
+    ), -pady=>4);
     $VDA_kbdtk_entry->Subwidget("choices")->configure(%choices_defaults);
     $VDA_kbdtk_entry->Subwidget("arrow")->configure(%arrow_defaults);
 
-# Sliders
-    StdSlider(\$subframe, \$VDAosclv[$osc],   0, 99, 11, 1, (25+($osc*67)), 'Oscillator Level');
-    StdSlider(\$subframe, \$VDAakti[$osc],  -99, 99, 22, 1, (72+($osc*67)), 'Amplifier Keyboard Tracking Intensity');
-    StdSlider(\$subframe, \$VDAavs[$osc],   -99, 99, 22, 1, (64+($osc*67)), 'Amplifier Velocity Sense');
-    StdSlider(\$subframe, \$VDAegtkt[$osc],   0, 99, 11, 1, (73+($osc*67)), 'EG Time Keyboard Track');
-    StdSlider(\$subframe, \$VDAegtvs[$osc],   0, 99, 11, 1, (65+($osc*67)), 'EG Time Velocity Sense');
+# Keyboard Track Mode
+    my $ktmodef=$subframe->Frame()->grid(-columnspan=>2);
 
+    $ktmodef->Label(-text=>'Mode:', -font=>'Sans 8')->grid(-row=>0, -column=>0);
+    my @ktmodelabel=('off','low','high','all');
+    for (my $n=0;$n<=3;$n++) {
+        $ktmodef->Radiobutton(
+            -text     => $ktmodelabel[$n],
+            -font     => 'Fixed 8',
+            -value    => $n,
+            -variable => \$VDAktmode[$osc],
+            -command  => sub{ SendPaChMsg((71+($osc*67)),$VDAktmode[$osc]); }
+        )->grid(-row=>0, -column=>$n+1);
+    }
+
+# Sliders
+    StdSlider(\$subframe, \$VDAakti[$osc],  -99, 99, 22, 1, (72+($osc*67)), 'VDA'.($osc+1).' EG Level Keyboard Tracking');
+    StdSlider(\$subframe, \$VDAegtkt[$osc],   0, 99, 11, 1, (73+($osc*67)), 'VDA'.($osc+1).' EG Time Keyboard Tracking');
+
+# Direction switches
+    my $tmpf2=$subframe->Frame()->grid(-columnspan=>2);
+    DirSwitch(\$tmpf2, \$VDA_ATtk[$osc], (74+($osc*67)), 'AT:');
+    DirSwitch(\$tmpf2, \$VDA_DTtk[$osc], (75+($osc*67)), 'DT:');
+    DirSwitch(\$tmpf2, \$VDA_STtk[$osc], (76+($osc*67)), 'ST:');
+    DirSwitch(\$tmpf2, \$VDA_RTtk[$osc], (77+($osc*67)), 'RT:');
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -1052,27 +1280,7 @@ sub VDA_Frame {
 
 sub Pitch_MG_Frame {
     my($osc)=@_;
-
-    $Pitch_MG[$osc]->Label(%TitleLbl_defaults, -text=> 'Pitch Modulation Generator'
-    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
-
-    my $subframe=$Pitch_MG[$osc]->Frame(
-    )->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
-
-# Modulation Waveform
-    my $modwavf=$subframe->Frame()->grid(-columnspan=>2);
-
-    $modwavf->Label(-text=>'Modulation Waveform:', -font=>'Sans 8')->grid(-row=>0, -columnspan=>6);;
-    my @modwavlabel=('tri', "saw\x{2191}", "saw\x{2193}", 'sq1', 'rnd', 'sq2');
-    for (my $n=0;$n<=5;$n++) {
-        $modwavf->Radiobutton(
-            -text     => $modwavlabel[$n],
-            -font     => 'Sans 8',
-            -value    => $n,
-            -variable => \$PMGmod_wav[$osc],
-            -command  => sub{ SendPaChMsg((78+($osc*67)),$PMGmod_wav[$osc]); }
-        )->grid(-row=>1, -column=>$n);
-    }
+    my $subframe=StdFrame(\$Pitch_MG[$osc],'Pitch'.($osc+1).' Modulation Generator');
 
 # Key Sync
     my $keysyncf=$subframe->Frame()->grid(-columnspan=>2);
@@ -1085,16 +1293,32 @@ sub Pitch_MG_Frame {
         -command      => sub{ SendPaChMsg((83+($osc*67)),$PMGkeysync[$osc]); }
     )->pack(-side=>'left');
 
+# Modulation Waveform
+    my $modwavf=$subframe->Frame()->grid(-columnspan=>2);
+
+    $modwavf->Label(-text=>'Modulation Waveform:', -font=>'Sans 8')->grid(-row=>0, -columnspan=>6);
+    #my @modwavlabel=('tri', "saw\x{2191}", "saw\x{2193}", 'sqr1', 'rand', 'sqr2');
+    my @modwavlabel=('tri.xbm', 'sawup.xbm', 'sawdn.xbm', 'square.xbm', 'rand.xbm', 'square2.xbm');
+    for (my $n=0;$n<=5;$n++) {
+        $modwavf->Radiobutton(%RadioB_defaults,
+            -bitmap   => '@'.$modwavlabel[$n],
+            -value    => $n,
+            -width    => 35,
+            -height   => 23,
+            -variable => \$PMGmod_wav[$osc],
+            -command  => sub{ SendPaChMsg((78+($osc*67)),$PMGmod_wav[$osc]); }
+        )->grid(-row=>1, -column=>$n);
+    }
+
 # Sliders
     StdSlider(\$subframe, \$PMG_freq[$osc],   0, 99, 11, 1, (79+($osc*67)), 'Frequency');
     StdSlider(\$subframe, \$PMG_Int[$osc],    0, 99, 11, 1, (80+($osc*67)), 'Intensity');
     StdSlider(\$subframe, \$PMG_dly[$osc],    0, 99, 11, 1, (81+($osc*67)), 'Initial Delay');
     StdSlider(\$subframe, \$PMG_Fin[$osc],    0, 99, 11, 1, (82+($osc*67)), 'Fade In');
-    StdSlider(\$subframe, \$PMG_FMKT[$osc], -99, 99, 22, 1, (84+($osc*67)), 'Frequency Modulation by Keyboard Tracking');
+    StdSlider(\$subframe, \$PMG_FMKT[$osc], -99, 99, 22, 1, (84+($osc*67)), 'Frequency Modulation by Keyboard Track');
     StdSlider(\$subframe, \$PMG_FMAJ[$osc],   0,  9,  1, 1, (85+($osc*67)), 'Frequency Modulation by AT + JS');
     StdSlider(\$subframe, \$PMG_IMA[$osc],    0, 99, 11, 1, (86+($osc*67)), 'Intensity Modulation by Aftertouch');
     StdSlider(\$subframe, \$PMG_IMJ[$osc],    0, 99, 11, 1, (87+($osc*67)), 'Intensity Modulation by Joystick');
-
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -1102,12 +1326,44 @@ sub Pitch_MG_Frame {
 
 sub Main_Osc_Frame {
     my($osc)=@_;
+    my $subframe=StdFrame(\$Main_Osc[$osc],'Osc'.($osc+1).' Main');
 
-    $Main_Osc[$osc]->Label(%TitleLbl_defaults, -text=> 'Main'
-    )->pack(-fill=>'x', -expand=>1, -anchor=>'n');
+# Multisound
+    my $OSC_msnd_fn=$subframe->Frame()->grid(-columnspan=>2);
 
-    my $subframe=$Main_Osc[$osc]->Frame(
-    )->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
+    $OSC_msnd_fn->Label(-text=>'Multisound: ', -font=>'Sans 8')->grid(
+    my $OSC_msnd_entry=$OSC_msnd_fn->BrowseEntry(%BEntry_defaults,
+        -variable     => \$msound[$osc],
+        -choices      => \@X5D_msounds,
+        -width        => 15,
+        -font         => 'Fixed 8',
+        -browsecmd    => sub{ SendPaChMsg((24+($osc*67)),($msound[$osc]=~/^(\d\d\d):.*/)); }
+    ));
+    $OSC_msnd_entry->Subwidget("choices")->configure(%choices_defaults);
+    $OSC_msnd_entry->Subwidget("arrow")->configure(%arrow_defaults);
+
+# Octave
+    my $octavef=$subframe->Frame()->grid(-columnspan=>2);
+
+    $octavef->Label(-text=>'Octave: ', -font=>'Sans 8')->grid(-row=>0, -column=>0);
+    my @octavelabel=(['4\'','1'],['8\'','0'],['16\'','-1'],['32\'','-2']);
+    for (my $n=0;$n<=3;$n++) {
+        $octavef->Radiobutton(
+            -text     => $octavelabel[$n][0],
+            -font     => 'Fixed 8',
+            -value    => $octavelabel[$n][1],
+            -variable => \$octave[$osc],
+            -command  => sub{ SendPaChMsg((26+($osc*67)),$octave[$osc]); }
+        )->grid(-row=>0, -column=>$n+1);
+    }
+
+# Sliders
+    StdSlider(\$subframe, \$PEG_Int[$osc],   -99, 99, 22, 1, (27+($osc*67)), 'Pitch EG Intensity');
+    StdSlider(\$subframe, \$ABPan[$osc],      -1, 30,  0, 1, (28+($osc*67)), 'Pan: OFF,A15---------CNT---------------B15');
+    StdSlider(\$subframe, \$Csend_lvl[$osc],   0,  9,  1, 1, (29+($osc*67)), 'C Send Level');
+    StdSlider(\$subframe, \$Dsend_lvl[$osc],   0,  9,  1, 1, (30+($osc*67)), 'D Send Level');
 
 }
+
+#-------------------------------------------------------------------------------------------------------------------------
 
