@@ -29,6 +29,7 @@ use Tk::NoteBook;
 use Tk::BrowseEntry;
 use Tk::Optionmenu;
 use Tk::JPEG;
+use Tk::PNG;
 use List::Util qw[min max];
 
 use MIDI::ALSA ('SND_SEQ_EVENT_PORT_UNSUBSCRIBED',
@@ -256,6 +257,19 @@ my @X5D_drums=( @X5_drums,
 '209:Jung Gliss', '210:MalletLoop', '211:MouthHarp1', '212:MouthHrp1A', '213:MouthHarp2',
 '214:MouthHrp2A');
 
+my @effects=(
+'00:No Effect', '01:Hall', '02:Ensemble Hall', '03:Concert Hall', '04:Room', '05:Large Room',
+'06:Live Stage', '07:Wet Plate', '08:Dry Plate', '09:Spring Reverb', '10:Early Reflection 1',
+'11:Early Reflection 2', '12:Early Reflection 3', '13:Stereo Delay', '14:Cross Delay',
+'15:Dual Mono Delay', '16:Multi Tap Delay 1', '17:Multi Tap Delay 2', '18:Multi Tap Delay 3',
+'19:Stereo Chorus 1', '20:Stereo Chorus 2', '21:Quadrature Chorus', '22:Cross Over Chorus',
+'23:Harmonic Chorus', '24:Symphonic Ensemble', '25:Flanger 1', '26:Flanger 2', '27:Cross Over Flanger',
+'28:Exciter', '29:Enhancer', '30:Distortion', '31:Over Drive', '32:Stereo Phaser 1', '33:Stereo Phaser 2',
+'34:Rotary Speaker', '35:Auto Pan', '36:Tremolo', '37:Parametric EQ', '38:Chorus-Delay', '39:Flanger-Delay',
+'40:Delay / Hall', '41:Delay / Room', '42:Delay / Chorus', '43:Delay / Flanger', '44:Delay / Distortion',
+'45:Delay / Over Drive', '46:Delay / Phaser', '47:Delay / Rotary Speaker'
+);
+
 # array mapping MIDI note numbers 0-127 to note names C-1 to G9
 my @notes;
 my @keys=('C ', 'C#', 'D ', 'D#', 'E ', 'F ', 'F#', 'G ', 'G#', 'A ', 'A#', 'B ');
@@ -267,6 +281,9 @@ for (my $nnr=0; $nnr<128; $nnr++) {
 # hash mapping note names C-1 to G9 to MIDI note numbers 0-127
 my %noteshash; @noteshash{@notes}=0..$#notes;
 
+# Pan values
+my @panval=('OFF', 'A15', 'A14', 'A13', 'A12', 'A11', 'A10', 'A 9', 'A 8', 'A 7', 'A 6', 'A 5', 'A 4', 'A 3', 'A 2',
+    'A 1', 'CNT', 'B 1', 'B 2', 'B 3', 'B 4', 'B 5', 'B 6', 'B 7', 'B 8', 'B 9', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15');
 
 ## Program Paramters
 my $modified=0;
@@ -331,6 +348,10 @@ my @PMG_Fin;         my @PMG_Int;
 my @PMG_FMKT;        my @PMG_IMA;
 my @PMG_IMJ;         my @PMG_FMAJ;
 my @PMGmod_wav;      my @PMGkeysync;
+# Effects
+my @FXtype;
+my @FXtoggle;
+my $FXplacement;
 
 # selected and available midi in/out devices
 my $midi_outdev="";
@@ -358,6 +379,8 @@ my @VDAkt;
 my @VDA_EG;
 my @Main_Osc;
 my @Pitch_MG;
+my @Main_FX;
+my $FX_Place;
 my $combwin;
 my $midiupload;
 my $midi_settings;
@@ -425,6 +448,7 @@ $tab[3] = $book->add('Tab3', -label=>'Effects');
 
 Main_Tab(\$tab[0]);
 Osc_Tabs(\$tab[1], \$tab[2]);
+FX_Tab(\$tab[3]);
 StatusBar();
 
 MainLoop;
@@ -494,6 +518,20 @@ sub Osc_Tabs {
         VDAvs_Frame($n);
         VDAkt_Frame($n);
     }
+}
+
+# Effects Tab
+sub FX_Tab {
+    my($FXTab)=@_;
+    my $Col_1 =$$FXTab->Frame()->pack(-side=>'left',  -fill=>'y');
+    my $Col_2 =$$FXTab->Frame()->pack(-side=>'left');
+    my $Col_34=$$FXTab->Frame()->pack(-side=>'right', -fill=>'y');
+    for (my $n=0; $n<=1; $n++) {
+        $Main_FX[$n]=$Col_1->Frame(%Frame_defaults)->pack();
+        Main_FX_Frame($n);
+    }
+    $FX_Place=$Col_34->Frame(%Frame_defaults)->pack();
+    FX_Place_Frame();
 }
 
 # top menu bar
@@ -886,6 +924,11 @@ sub newProgram {
         $PMG_IMJ[$osc]=0;         $PMG_FMAJ[$osc]=0;
         $PMGmod_wav[$osc]=0;      $PMGkeysync[$osc]=0;
     }
+    for (my $fxnr=0; $fxnr<=1; $fxnr++){
+        $FXtype[$fxnr]=$effects[0];
+        $FXtoggle[$fxnr]=0;
+        $FXplacement=0;
+    }
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -977,7 +1020,13 @@ sub Main_Prg_Frame {
             -font     => 'Sans 8',
             -value    => $n,
             -variable => \$osc_mode,
-            -command  => sub{ SendPaChMsg(0,$osc_mode); }
+            -command  => sub{ SendPaChMsg(0,$osc_mode);
+                              # disable Osc2 tab if single or drums mode
+                              if ($osc_mode == 1) {
+                                  $book->pageconfigure('Tab2',-state=>'normal') }
+                              else {
+                                  $book->pageconfigure('Tab2',-state=>'disabled') }
+                         }
         )->pack(-side=>'left');
     }
 
@@ -1357,12 +1406,90 @@ sub Main_Osc_Frame {
         )->grid(-row=>0, -column=>$n+1);
     }
 
-# Sliders
+# Pitch EG Intensity
     StdSlider(\$subframe, \$PEG_Int[$osc],   -99, 99, 22, 1, (27+($osc*67)), 'Pitch EG Intensity');
-    StdSlider(\$subframe, \$ABPan[$osc],      -1, 30,  0, 1, (28+($osc*67)), 'Pan: OFF,A15---------CNT---------------B15');
+
+# Custom Pan Slider Subroutine
+    my $pancurr=$panval[($ABPan[$osc]+1)];
+    $subframe->Scale(%Scale_defaults,
+        -variable     =>  \$ABPan[$osc],
+        -to           =>  30,
+        -from         =>  -1,
+        -tickinterval =>  0,
+        -label        =>  'Pan (OFF,A<-CNT->B)',
+        -command      => sub{ $pancurr=$panval[($ABPan[$osc]+1)]; SendPaChMsg((28+($osc*67)),$ABPan[$osc]); }
+    )->grid(
+    $subframe->Label(%Scale_label_defaults,
+        -width        => 4,
+        -textvariable => \$pancurr
+    ),-padx=>4);
+
+# Sliders
     StdSlider(\$subframe, \$Csend_lvl[$osc],   0,  9,  1, 1, (29+($osc*67)), 'C Send Level');
     StdSlider(\$subframe, \$Dsend_lvl[$osc],   0,  9,  1, 1, (30+($osc*67)), 'D Send Level');
 
+}
+
+#-------------------------------------------------------------------------------------------------------------------------
+# Main Effects Frame
+sub Main_FX_Frame {
+    my($fxnr)=@_;
+    my $subframe=StdFrame(\$Main_FX[$fxnr],'Effect '.($fxnr+1));
+
+# Effect on/off
+    my $fxtogglef=$subframe->Frame()->grid(-columnspan=>2);
+
+    $fxtogglef->Label(-text=>'Effect'.($fxnr+1).':', -font=>'Sans 8')->pack(-side=>'left');
+    $fxtogglef->Checkbutton(
+        -font         => 'Sans 8',
+        -text         => 'on/off',
+        -variable     => \$FXtoggle[$fxnr],
+        -command      => sub{ SendPaChMsg((157+($fxnr*1)),$FXtoggle[$fxnr]); }
+    )->pack(-side=>'left');
+
+# Effect Type
+    my $FX_type_fn=$subframe->Frame()->grid(-columnspan=>2);
+
+    $FX_type_fn->Label(-text=>'Effect Type: ', -font=>'Sans 8')->grid(
+    my $FX_type_entry=$FX_type_fn->BrowseEntry(%BEntry_defaults,
+        -variable     => \$FXtype[$fxnr],
+        -choices      => \@effects,
+        -width        => 25,
+        -font         => 'Fixed 8',
+        -browsecmd    => sub{ SendPaChMsg((155+$fxnr),($FXtype[$fxnr]=~/^(\d\d):.*/)); }
+    ));
+    $FX_type_entry->Subwidget("choices")->configure(%choices_defaults);
+    $FX_type_entry->Subwidget("arrow")->configure(%arrow_defaults);
+}
+
+#-------------------------------------------------------------------------------------------------------------------------
+# FX Placement Selection
+sub FX_Place_Frame {
+    my $subframe=StdFrame(\$FX_Place,'Effects Placement');
+
+    my $fxplacef=$subframe->Frame()->grid(-columnspan=>2);
+    my @fxplacelabel=(['x5dr-fx-serial.png'   , 'Serial'    ],
+                      ['x5dr-fx-parallel1.png', 'Parallel 1'],
+                      ['x5dr-fx-parallel2.png', 'Parallel 2'],
+                      ['x5dr-fx-parallel3.png', 'Parallel 3']);
+    for (my $n=0;$n<=3;$n++) {
+        $fxplacef->Radiobutton(
+            -padx        => 0,
+            -value       => $n,
+            -variable    => \$FXplacement,
+            -command     => sub{ SendPaChMsg(165,$FXplacement); }
+        )->grid(-row=>$n, -column=>0, -sticky=>'ne');
+        my $image=$subframe->Photo(-file=>$fxplacelabel[$n][0]);
+        $fxplacef->Label(
+            -image       => $image,
+            -borderwidth => 0,
+            -anchor      =>'n'
+        )->grid(-row=>$n, -column=>1, -ipady=>2);
+        $fxplacef->Label(
+            -background  => 'white',
+            -text        => $fxplacelabel[$n][1]
+        )->grid(-row=>$n, -column=>1, -sticky=>'nw');
+    }
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
