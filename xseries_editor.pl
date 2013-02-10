@@ -50,7 +50,6 @@ my %Scale_defaults=(
     -sliderlength => 16,
     -borderwidth  => 1,
     -showvalue    => 0,
-    -resolution   => 1,
     -font         => "Sans 6",
     -cursor       => 'hand2',
     -orient       => 'horizontal'
@@ -285,6 +284,9 @@ my %noteshash; @noteshash{@notes}=0..$#notes;
 my @panval=('OFF', 'A15', 'A14', 'A13', 'A12', 'A11', 'A10', 'A 9', 'A 8', 'A 7', 'A 6', 'A 5', 'A 4', 'A 3', 'A 2',
     'A 1', 'CNT', 'B 1', 'B 2', 'B 3', 'B 4', 'B 5', 'B 6', 'B 7', 'B 8', 'B 9', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15');
 
+# Dynamic Modulation Sources
+my @dynmodsrc=('0:None', '1:Joystick (+Y)', '2:Joystick (-Y)', '3:Aftertouch', '4:Foot Pedal 1', '5:Foot Pedal 2', '6:VDA EG');
+
 ## Program Paramters
 my $modified=0;
 my $prgfilename='';
@@ -352,6 +354,17 @@ my @PMGmod_wav;      my @PMGkeysync;
 my @FXtype;
 my @FXtoggle;
 my $FXplacement;
+my @FXdmsrc;
+my @FXmodint;
+my @FXbalance1;
+my @FXbalance2;
+my $FXpan3;
+my $FXpan4;
+my $FXlev1L;
+my $FXlev1R;
+my $FXlev2L;
+my $FXlev2R;
+my @FXparm;
 
 # selected and available midi in/out devices
 my $midi_outdev="";
@@ -381,9 +394,14 @@ my @Main_Osc;
 my @Pitch_MG;
 my @Main_FX;
 my $FX_Place;
+my $FX_Panpots;
+my $FX_Levels;
+my @FX_frame;
 my $combwin;
 my $midiupload;
 my $midi_settings;
+my @Col_FX;
+my $Col_34FX;
 
 # default Korg device number (1-16)
 my $dev_nr=1;
@@ -523,15 +541,23 @@ sub Osc_Tabs {
 # Effects Tab
 sub FX_Tab {
     my($FXTab)=@_;
-    my $Col_1 =$$FXTab->Frame()->pack(-side=>'left',  -fill=>'y');
-    my $Col_2 =$$FXTab->Frame()->pack(-side=>'left');
-    my $Col_34=$$FXTab->Frame()->pack(-side=>'right', -fill=>'y');
-    for (my $n=0; $n<=1; $n++) {
-        $Main_FX[$n]=$Col_1->Frame(%Frame_defaults)->pack();
-        Main_FX_Frame($n);
-    }
-    $FX_Place=$Col_34->Frame(%Frame_defaults)->pack();
+    $Col_FX[0]=$$FXTab->Frame()->pack(-side=>'left', -fill=>'y');
+    $Col_FX[1]=$$FXTab->Frame()->pack(-side=>'left', -fill=>'y');
+    $Col_34FX =$$FXTab->Frame()->pack(-side=>'left', -fill=>'both', -expand=>1);
+
+    $Main_FX[0] =$Col_FX[0]->Frame(%Frame_defaults)->pack();
+    $FX_frame[0]=$Col_FX[0]->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1, -anchor=>'n');
+    $Main_FX[1] =$Col_FX[1]->Frame(%Frame_defaults)->pack();
+    $FX_frame[1]=$Col_FX[1]->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1, -anchor=>'n');
+    $FX_Place   =$Col_34FX->Frame(%Frame_defaults)->pack(-fill=>'x', -expand=>1, -anchor=>'n');
+    $FX_Panpots =$Col_34FX->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1, -anchor=>'n');
+
+    Main_FX_Frame(0);
+    Main_FX_Frame(1);
     FX_Place_Frame();
+    FX_Panpots_Frame();
+    ShowFXCtrls(0);
+    ShowFXCtrls(1);
 }
 
 # top menu bar
@@ -806,15 +832,17 @@ sub SysexEncode {
 
 # Standard Horizontal Slider Subroutine
 sub StdSlider {
-    my($frame,$var,$from,$to,$intv,$incr,$param,$label)=@_;
+    my($frame,$var,$from,$to,$intv,$incr,$param,$label,$transf)=@_;
+    if (! $transf) {$transf=''}
 
     $$frame->Scale(%Scale_defaults,
         -variable     =>  $var,
         -to           =>  $to,
         -from         =>  $from,
+        -resolution   =>  $incr,
         -tickinterval =>  $intv,
         -label        =>  $label,
-        -command      => sub{ SendPaChMsg($param,$$var); }
+        -command      => sub{ SendPaChMsg($param,(eval"$$var$transf")); }
     )->grid(
     $$frame->Spinbox(%Entry_defaults,
         -width        =>  3,
@@ -826,7 +854,7 @@ sub StdSlider {
         -state        => 'readonly',
         -readonlybackground => $LCDbg,
         -textvariable =>  $var,
-        -command      => sub{ SendPaChMsg($param,$$var); }
+        -command      => sub{ SendPaChMsg($param,(eval"$$var$transf")); }
     ),-padx=>4);
 }
 
@@ -851,7 +879,7 @@ sub DirSwitch {
 sub StdFrame {
     my($frame,$title)=@_;
     $$frame->Label(%TitleLbl_defaults, -text=>$title)->pack(-fill=>'x', -expand=>1, -anchor=>'n');
-    my $subframe=$$frame->Frame()->pack(-fill=>'x', -expand=>1, -padx=>5, -pady=>5);
+    my $subframe=$$frame->Frame()->pack(-fill=>'x', -expand=>1, -anchor=>'n', -padx=>5, -pady=>5);
     return $subframe;
 }
 
@@ -924,11 +952,22 @@ sub newProgram {
         $PMG_IMJ[$osc]=0;         $PMG_FMAJ[$osc]=0;
         $PMGmod_wav[$osc]=0;      $PMGkeysync[$osc]=0;
     }
+    # Effects
     for (my $fxnr=0; $fxnr<=1; $fxnr++){
         $FXtype[$fxnr]=$effects[0];
         $FXtoggle[$fxnr]=0;
-        $FXplacement=0;
+        $FXdmsrc[$fxnr]=$dynmodsrc[0];
+        $FXmodint[$fxnr]=0;
+        $FXbalance1[$fxnr]=0;
+        $FXbalance2[$fxnr]=0;
     }
+    $FXplacement=0;
+    $FXpan3=1;
+    $FXpan4=101;
+    $FXlev1L=0;
+    $FXlev1R=0;
+    $FXlev2L=0;
+    $FXlev2R=0;
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -1437,7 +1476,7 @@ sub Main_FX_Frame {
     my $subframe=StdFrame(\$Main_FX[$fxnr],'Effect '.($fxnr+1));
 
 # Effect on/off
-    my $fxtogglef=$subframe->Frame()->grid(-columnspan=>2);
+    my $fxtogglef=$subframe->Frame()->grid(-columnspan=>2, -ipady=>6);
 
     $fxtogglef->Label(-text=>'Effect'.($fxnr+1).':', -font=>'Sans 8')->pack(-side=>'left');
     $fxtogglef->Checkbutton(
@@ -1450,16 +1489,35 @@ sub Main_FX_Frame {
 # Effect Type
     my $FX_type_fn=$subframe->Frame()->grid(-columnspan=>2);
 
-    $FX_type_fn->Label(-text=>'Effect Type: ', -font=>'Sans 8')->grid(
+    $FX_type_fn->Label(-text=>'Effect Type:', -font=>'Sans 8')->grid(
     my $FX_type_entry=$FX_type_fn->BrowseEntry(%BEntry_defaults,
         -variable     => \$FXtype[$fxnr],
         -choices      => \@effects,
         -width        => 25,
         -font         => 'Fixed 8',
-        -browsecmd    => sub{ SendPaChMsg((155+$fxnr),($FXtype[$fxnr]=~/^(\d\d):.*/)); }
+        -browsecmd    => sub{ SendPaChMsg((155+$fxnr),($FXtype[$fxnr]=~/^(\d\d):.*/));
+                              ShowFXCtrls($fxnr); }
     ));
     $FX_type_entry->Subwidget("choices")->configure(%choices_defaults);
     $FX_type_entry->Subwidget("arrow")->configure(%arrow_defaults);
+
+# Dynamic Modulation Source
+    my $FX_dynmod_fn=$subframe->Frame()->grid(-columnspan=>2, -sticky=>'ew', -ipady=>8);
+
+    $FX_dynmod_fn->Label(-text=>'Dynamic Mod. Source:', -font=>'Sans 8')->pack(-side=>'left', -fill=>'x', -expand=>1);
+    my $FX_dynmod_entry=$FX_dynmod_fn->BrowseEntry(%BEntry_defaults,
+        -variable     => \$FXdmsrc[$fxnr],
+        -choices      => \@dynmodsrc,
+        -width        => 15,
+        -font         => 'Fixed 8',
+        -browsecmd    => sub{ SendPaChMsg((166+($fxnr*11)),($FXdmsrc[$fxnr]=~/^(\d):.*/)); }
+    )->pack(-side=>'right', -fill=>'x', -expand=>1);
+    $FX_dynmod_entry->Subwidget("choices")->configure(%choices_defaults);
+    $FX_dynmod_entry->Subwidget("arrow")->configure(%arrow_defaults);
+
+    StdSlider(\$subframe, \$FXmodint[$fxnr],  -15,  15,   3, 1, (167+($fxnr*11)), 'Dynamic Modulation Intensity');
+#    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0, 100,  10, 1, (175+($fxnr*11)), 'Balance 1 (DRY<-50:50->EFF)');
+#    StdSlider(\$subframe, \$FXbalance2[$fxnr],  0, 100,  10, 1, (176+($fxnr*11)), 'Balance 2 (DRY<-50:50->EFF)');
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -1473,23 +1531,191 @@ sub FX_Place_Frame {
                       ['x5dr-fx-parallel2.png', 'Parallel 2'],
                       ['x5dr-fx-parallel3.png', 'Parallel 3']);
     for (my $n=0;$n<=3;$n++) {
+        # Radiobutton to select placement
         $fxplacef->Radiobutton(
             -padx        => 0,
             -value       => $n,
             -variable    => \$FXplacement,
-            -command     => sub{ SendPaChMsg(165,$FXplacement); }
+            -command     => sub{ SendPaChMsg(165,$FXplacement);
+                                 # display FX Levels frame if 'parallel 3'
+                                 if ($FXplacement == 3) { 
+                                     $FX_Panpots->destroy() if Tk::Exists($FX_Panpots);
+                                     if (! Tk::Exists($FX_Levels)) {
+                                         $FX_Levels=$Col_34FX->Frame(%Frame_defaults
+                                         )->pack(-fill=>'both', -expand=>1, -anchor=>'n');
+                                         FX_Levels_Frame(); 
+                                     }
+                                 # else display FX Panpots frame (if not already displayed)
+                                 } elsif (! Tk::Exists($FX_Panpots)) {
+                                     $FX_Levels->destroy() if Tk::Exists($FX_Levels);
+                                     $FX_Panpots=$Col_34FX->Frame(%Frame_defaults
+                                     )->pack(-fill=>'both', -expand=>1, -anchor=>'n');
+                                     FX_Panpots_Frame();
+                                 }
+                               }
         )->grid(-row=>$n, -column=>0, -sticky=>'ne');
+        # effect placement diagram
         my $image=$subframe->Photo(-file=>$fxplacelabel[$n][0]);
         $fxplacef->Label(
             -image       => $image,
             -borderwidth => 0,
             -anchor      =>'n'
         )->grid(-row=>$n, -column=>1, -ipady=>2);
+        # name overlay in upper left corner
         $fxplacef->Label(
             -background  => 'white',
             -text        => $fxplacelabel[$n][1]
         )->grid(-row=>$n, -column=>1, -sticky=>'nw');
     }
+}
+
+#-------------------------------------------------------------------------------------------------------------------------
+# FX Panpots / Levels
+sub FX_Panpots_Frame {
+    my $subframe=$FX_Panpots->Frame()->pack(-fill=>'both', -expand=>1, -pady=>4);
+    StdSlider(\$subframe, \$FXpan3, 0, 101, 10, 1, 159, 'Pan 3 (OFF,L<-50:50->R)');
+    StdSlider(\$subframe, \$FXpan4, 0, 101, 10, 1, 160, 'Pan 4 (OFF,L<-50:50->R)');
+}
+
+sub FX_Levels_Frame {
+    my $subframe=$FX_Levels->Frame()->pack(-fill=>'both', -expand=>1);
+
+    my $subframe1=$subframe->Frame()->pack(-side=>'left', -fill=>'x', -expand=>1, -padx=>4, -pady=>4);
+    StdSlider(\$subframe1, \$FXlev1L, 0, 9, 1, 1, 161, 'Level 1 - L');
+    StdSlider(\$subframe1, \$FXlev1R, 0, 9, 1, 1, 162, 'Level 1 - R');
+
+    my $subframe2=$subframe->Frame()->pack(-side=>'left', -fill=>'x', -expand=>1, -padx=>4, -pady=>4);
+    StdSlider(\$subframe2, \$FXlev2L, 0, 9, 1, 1, 163, 'Level 2 - L');
+    StdSlider(\$subframe2, \$FXlev2R, 0, 9, 1, 1, 164, 'Level 2 - R');
+}
+
+#-------------------------------------------------------------------------------------------------------------------------
+# 
+sub ShowFXCtrls {
+    my($fxnr)=@_;
+    my($ty,$name)=($FXtype[$fxnr]=~/^(\d\d):(.*)/);
+    #print STDERR "[$fxnr] [$FXtype[$fxnr]] [$ty] [$name]\n";
+    $FX_frame[$fxnr]->destroy() if Tk::Exists($FX_frame[$fxnr]);
+    $FX_frame[$fxnr]=$Col_FX[$fxnr]->Frame(%Frame_defaults)->pack(-fill=>'both', -expand=>1, -anchor=>'n');
+    if    ($ty== 0) { StdFrame(\$FX_frame[$fxnr],$name); }
+    elsif ($ty<= 9) { FX_Reverb($fxnr,$name,$ty); }
+    elsif ($ty<=12) { FX_EarlyRefl($fxnr,$name,$ty); }
+    elsif ($ty<=14) { FX_StDelay($fxnr,$name,$ty); }
+    elsif ($ty==15) { FX_DDelay($fxnr,$name,$ty); }
+    elsif ($ty<=18) { FX_MTDelay($fxnr,$name,$ty); }
+    elsif ($ty<=20) { FX_StChorus($fxnr,$name,$ty); }
+}
+
+#-------------------------------------------------------------------------------------------------------------------------
+# FX type specific controls
+
+# Reverbs: 1,2,3 (Hall type), 4,5,6 (Room type), 7,8,9 (Plate type)
+sub FX_Reverb {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    if ($ty<=3) {
+        StdSlider(\$subframe, \$FXparm[0][$fxnr],   2,   99,   24,   1, (168+($fxnr*11)), 'Reverb Time [x/10 sec]', '-2');
+    } elsif ($ty<=6) {
+        StdSlider(\$subframe, \$FXparm[0][$fxnr],   2,   49,    9,   1, (168+($fxnr*11)), 'Reverb Time [x/10 sec]', '-2');
+    } elsif ($ty<=9) {
+        StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,   99,   11,   1, (168+($fxnr*11)), 'Reverb Time');
+    }
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,  200,   25,   1, (169+($fxnr*11)), 'Pre Delay [ms]');
+    if ($ty<=6) {
+        StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'E.R Level');
+    } elsif ($ty<=9) {
+        StdSlider(\$subframe, \$FXparm[4][$fxnr],   1,   10,    1,   1, (170+($fxnr*11)), 'E.R Level');
+    }
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (171+($fxnr*11)), 'High Damp [%]');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXparm[7][$fxnr], -12,   12,    3,   1, (172+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[6][$fxnr], -12,   12,    3,   1, (173+($fxnr*11)), 'EQ High [dB]');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
+}
+
+# Early Reflection: 10,11,12
+sub FX_EarlyRefl {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr], 100,  800,  100,  10, (168+($fxnr*11)), 'Early Reflection Time [ms]', '/10-10');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr],   0,  200,   25,   1, (169+($fxnr*11)), 'Pre Delay [ms]');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXparm[7][$fxnr], -12,   12,    3,   1, (170+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[6][$fxnr], -12,   12,    3,   1, (171+($fxnr*11)), 'EQ High [dB]');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
+}
+
+# Stereo Delay: 13,14
+sub FX_StDelay {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  500,  100,   1, (168+($fxnr*11)), 'Delay Time Left [ms]');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,  500,  100,   1, (169+($fxnr*11)), 'Delay Time Right [ms]');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr], -99,   99,   22,   1, (170+($fxnr*11)), 'Feedback [%]');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,   99,   11,   1, (171+($fxnr*11)), 'High Damp [%]');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXparm[7][$fxnr], -12,   12,    3,   1, (172+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[6][$fxnr], -12,   12,    3,   1, (173+($fxnr*11)), 'EQ High [dB]');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
+}
+
+# Dual Delay: 15
+sub FX_DDelay {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  500,  100,   1, (168+($fxnr*11)), 'Delay Time Left [ms]');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr], -99,   99,   22,   1, (169+($fxnr*11)), 'Feedback Left [%]');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'High Damp Left [%]');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,  500,  100,   1, (171+($fxnr*11)), 'Delay Time Right [ms]');
+    StdSlider(\$subframe, \$FXparm[6][$fxnr], -99,   99,   22,   1, (172+($fxnr*11)), 'Feedback Right [%]');
+    StdSlider(\$subframe, \$FXparm[7][$fxnr],   0,   99,   11,   1, (173+($fxnr*11)), 'High Damp Right [%]');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
+}
+
+# Multi Tap Delay: 16,17,18
+sub FX_MTDelay {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  500,  100,   1, (168+($fxnr*11)), 'Delay Time 1');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,  500,  100,   1, (169+($fxnr*11)), 'Delay Time 2');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr], -99,   99,   22,   1, (170+($fxnr*11)), 'Feedback');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXparm[6][$fxnr], -12,   12,    3,   1, (171+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[7][$fxnr], -12,   12,    3,   1, (172+($fxnr*11)), 'EQ High [dB]');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
+}
+
+# Stereo Chorus: 19,20
+sub FX_StChorus {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  200,   50,   1, (168+($fxnr*11)), 'Delay Time [ms]');
+   # Modulation Waveform
+    my $modwavf=$subframe->Frame()->grid(-columnspan=>2);
+    $modwavf->Label(-text=>'Mod Waveform: ', -font=>'Sans 8')->pack(-side=>'left');
+    my @modwavlabel=('sine', 'triangle');
+    for (my $n=0;$n<=1;$n++) {
+        $modwavf->Radiobutton(
+            -text     => $modwavlabel[$n],
+            -font     => 'Sans 8',
+            -value    => $n,
+            -variable => \$FXparm[1][$fxnr],
+            -command  => sub{ SendPaChMsg((171+($fxnr*11)),$FXparm[1][$fxnr]); }
+        )->pack(-side=>'left');
+    }
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'Modulation Depth');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,  216,   36,   1, (169+($fxnr*11)), 'Modulation Speed [0.03 - 30 Hz]');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXparm[4][$fxnr], -12,   12,    3,   1, (172+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr], -12,   12,    3,   1, (173+($fxnr*11)), 'EQ High [dB]');
+    $subframe->Label()->grid(-columnspan=>2);
+    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
