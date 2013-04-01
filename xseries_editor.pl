@@ -284,6 +284,21 @@ my %noteshash; @noteshash{@notes}=0..$#notes;
 my @panval=('OFF', 'A15', 'A14', 'A13', 'A12', 'A11', 'A10', 'A 9', 'A 8', 'A 7', 'A 6', 'A 5', 'A 4', 'A 3', 'A 2',
     'A 1', 'CNT', 'B 1', 'B 2', 'B 3', 'B 4', 'B 5', 'B 6', 'B 7', 'B 8', 'B 9', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15');
 
+# DRY/FX Balance values
+my @dryfx=('DRY');
+$dryfx[100]='FX';
+for (my $nnr=1; $nnr<100; $nnr++) {
+    $dryfx[$nnr]=(sprintf("%02d",(100-$nnr))).":".(sprintf("%02d",($nnr)));
+}
+
+# Out3/4 Panpot values
+my @out34=('OFF');
+$out34[1]  ='L';
+$out34[101]='R';
+for (my $nnr=2; $nnr<=100; $nnr++) {
+    $out34[$nnr]=(sprintf("%02d",(101-$nnr))).":".(sprintf("%02d",($nnr-1)));
+}
+
 # Dynamic Modulation Sources
 my @dynmodsrc=('0:None', '1:Joystick (+Y)', '2:Joystick (-Y)', '3:Aftertouch', '4:Foot Pedal 1', '5:Foot Pedal 2', '6:VDA EG');
 
@@ -402,6 +417,9 @@ my $midiupload;
 my $midi_settings;
 my @Col_FX;
 my $Col_34FX;
+my $int_sc; my $int_sb;
+my $det_sc; my $det_sb;
+my $del_sc; my $del_sb;
 
 # default Korg device number (1-16)
 my $dev_nr=1;
@@ -835,7 +853,7 @@ sub StdSlider {
     my($frame,$var,$from,$to,$intv,$incr,$param,$label,$transf)=@_;
     if (! $transf) {$transf=''}
 
-    $$frame->Scale(%Scale_defaults,
+    my $scale=$$frame->Scale(%Scale_defaults,
         -variable     =>  $var,
         -to           =>  $to,
         -from         =>  $from,
@@ -844,7 +862,7 @@ sub StdSlider {
         -label        =>  $label,
         -command      => sub{ SendPaChMsg($param,(eval"$$var$transf")); }
     )->grid(
-    $$frame->Spinbox(%Entry_defaults,
+    my $spinbox=$$frame->Spinbox(%Entry_defaults,
         -width        =>  3,
         -justify      => 'center',
         -font         => 'Sans 10',
@@ -856,6 +874,53 @@ sub StdSlider {
         -textvariable =>  $var,
         -command      => sub{ SendPaChMsg($param,(eval"$$var$transf")); }
     ),-padx=>4);
+    return ($scale,$spinbox);
+}
+
+# Custom DRY:FX Balance Slider Subroutine
+sub DFXSlider {
+    my($frame,$var,$param)=@_;
+    my $dfxcurr=$dryfx[$$var];
+    $$frame->Scale(%Scale_defaults,
+        -variable     =>  $var,
+        -to           =>  100,
+        -from         =>  0,
+        -tickinterval =>  0,
+        -label        =>  'DRY:FX Balance (DRY<-50:50->FX)',
+        -command      => sub{ $dfxcurr=$dryfx[$$var]; SendPaChMsg($param,$$var); }
+    )->grid(
+    $$frame->Label(%Scale_label_defaults,
+        -width        => 4,
+        -textvariable => \$dfxcurr
+    ),-padx=>4, -pady=>4, -sticky=>'s', -ipadx=>1);
+}
+
+# Grid Label
+sub GridLabel {
+    my ($frame,$text)=@_;
+    $$frame->Label(-font=>'Sans 8', -text=>$text)->grid(-columnspan=>2);
+}
+
+# Radiobutton with Label
+sub OptSelect {
+    my ($frame,$var,$options,$parm,$desc,$nofr)=@_;
+    my $sf;
+    # create wrapper frame unless $nofr is set
+    if (! $nofr) {
+        $sf=$$frame->Frame()->grid(-columnspan=>2);
+    } else {
+        $sf=$$frame;
+    }
+    $sf->Label(-text=>$desc, -font=>'Sans 8')->pack(-side=>'left');
+    for (my $n=0; $n<=(@{$options}-1); $n++) {
+        $sf->Radiobutton(
+            -text     => $$options[$n],
+            -font     => 'Sans 8',
+            -value    => $n,
+            -variable => $var,
+            -command  => sub{ SendPaChMsg($parm,$$var); }
+        )->pack(-side=>'left');
+    }
 }
 
 # Direction Switch
@@ -953,15 +1018,16 @@ sub newProgram {
         $PMGmod_wav[$osc]=0;      $PMGkeysync[$osc]=0;
     }
     # Effects
+    $FXtype[0]=$effects[1];
+    $FXtype[1]=$effects[19];
     for (my $fxnr=0; $fxnr<=1; $fxnr++){
-        $FXtype[$fxnr]=$effects[0];
         $FXtoggle[$fxnr]=0;
         $FXdmsrc[$fxnr]=$dynmodsrc[0];
         $FXmodint[$fxnr]=0;
         $FXbalance1[$fxnr]=0;
         $FXbalance2[$fxnr]=0;
     }
-    $FXplacement=0;
+    $FXplacement=3;
     $FXpan3=1;
     $FXpan4=101;
     $FXlev1L=0;
@@ -1060,31 +1126,33 @@ sub Main_Prg_Frame {
             -value    => $n,
             -variable => \$osc_mode,
             -command  => sub{ SendPaChMsg(0,$osc_mode);
-                              # disable Osc2 tab if single or drums mode
+                              # disable Osc2 tab and Interval/Detune/Delay widgets if single or drums mode
                               if ($osc_mode == 1) {
-                                  $book->pageconfigure('Tab2',-state=>'normal') }
+                                  $book->pageconfigure('Tab2',-state=>'normal');
+                                  $int_sc->configure(-state=>'normal');
+                                  $int_sb->configure(-state=>'readonly');
+                                  $det_sc->configure(-state=>'normal');
+                                  $det_sb->configure(-state=>'readonly');
+                                  $del_sc->configure(-state=>'normal');
+                                  $del_sb->configure(-state=>'readonly'); }
                               else {
-                                  $book->pageconfigure('Tab2',-state=>'disabled') }
+                                  $book->pageconfigure('Tab2',-state=>'disabled');
+                                  $int_sc->configure(-state=>'disabled');
+                                  $int_sb->configure(-state=>'disabled');
+                                  $det_sc->configure(-state=>'disabled');
+                                  $det_sb->configure(-state=>'disabled');
+                                  $del_sc->configure(-state=>'disabled');
+                                  $del_sb->configure(-state=>'disabled'); }
                          }
         )->pack(-side=>'left');
     }
 
-# Assign
+# Assign and Hold
     my $asshldf=$subframe->Frame()->grid(-columnspan=>2);
 
-    $asshldf->Label(-text=>'Assign: ', -font=>'Sans 8')->pack(-side=>'left');
     my @asslabel=('poly', 'mono');
-    for (my $n=0;$n<=1;$n++) {
-        $asshldf->Radiobutton(
-            -text     => $asslabel[$n],
-            -font     => 'Sans 8',
-            -value    => $n,
-            -variable => \$assign,
-            -command  => sub{ SendPaChMsg(1,$assign); }
-        )->pack(-side=>'left');
-    }
+    OptSelect(\$asshldf, \$assign, \@asslabel, 1, 'Assign: ', 1);
 
-# Hold
     $asshldf->Label(-text=>'  Hold: ', -font=>'Sans 8')->pack(-side=>'left');
     $asshldf->Checkbutton(
         -text         => 'on/off',
@@ -1094,9 +1162,9 @@ sub Main_Prg_Frame {
     )->pack(-side=>'left');
 
 # Sliders
-    StdSlider(\$subframe, \$interval, -12, 12,  3, 1, 88, 'Osc1 / Osc2 Pitch Interval');
-    StdSlider(\$subframe, \$detune,   -50, 50, 10, 1, 89, 'Detune Osc1 / Osc2');
-    StdSlider(\$subframe, \$delay,      0, 99, 11, 1, 90, 'Delay Osc2 Start (ms)');
+    ($int_sc,$int_sb)=StdSlider(\$subframe, \$interval, -12, 12,  3, 1, 88, 'Osc1 / Osc2 Pitch Interval');
+    ($det_sc,$det_sb)=StdSlider(\$subframe, \$detune,   -50, 50, 10, 1, 89, 'Detune Osc1 / Osc2');
+    ($del_sc,$del_sb)=StdSlider(\$subframe, \$delay,      0, 99, 11, 1, 90, 'Delay Osc2 Start (ms)');
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -1254,19 +1322,8 @@ sub VDFkt_Frame {
     $VDF_kbdtk_entry->Subwidget("arrow")->configure(%arrow_defaults);
 
 # Keyboard Track Mode
-    my $ktmodef=$subframe->Frame()->grid(-columnspan=>2);
-
-    $ktmodef->Label(-text=>'Mode:', -font=>'Sans 8')->grid(-row=>0, -column=>0);
     my @ktmodelabel=('off','low','high','all');
-    for (my $n=0;$n<=3;$n++) {
-        $ktmodef->Radiobutton(
-            -text     => $ktmodelabel[$n],
-            -font     => 'Fixed 8',
-            -value    => $n,
-            -variable => \$VDFktmode[$osc],
-            -command  => sub{ SendPaChMsg((50+($osc*67)),$VDFktmode[$osc]); }
-        )->grid(-row=>0, -column=>$n+1);
-    }
+    OptSelect(\$subframe, \$VDFktmode[$osc], \@ktmodelabel, (50+($osc*67)), 'Mode:');
 
 # Sliders
     StdSlider(\$subframe, \$VDFcoffkt[$osc], -99, 99, 22, 1, (51+($osc*67)), 'Cutoff Keyboard Tracking Intensity');
@@ -1337,19 +1394,8 @@ sub VDAkt_Frame {
     $VDA_kbdtk_entry->Subwidget("arrow")->configure(%arrow_defaults);
 
 # Keyboard Track Mode
-    my $ktmodef=$subframe->Frame()->grid(-columnspan=>2);
-
-    $ktmodef->Label(-text=>'Mode:', -font=>'Sans 8')->grid(-row=>0, -column=>0);
     my @ktmodelabel=('off','low','high','all');
-    for (my $n=0;$n<=3;$n++) {
-        $ktmodef->Radiobutton(
-            -text     => $ktmodelabel[$n],
-            -font     => 'Fixed 8',
-            -value    => $n,
-            -variable => \$VDAktmode[$osc],
-            -command  => sub{ SendPaChMsg((71+($osc*67)),$VDAktmode[$osc]); }
-        )->grid(-row=>0, -column=>$n+1);
-    }
+    OptSelect(\$subframe, \$VDAktmode[$osc], \@ktmodelabel, (71+($osc*67)), 'Mode:');
 
 # Sliders
     StdSlider(\$subframe, \$VDAakti[$osc],  -99, 99, 22, 1, (72+($osc*67)), 'VDA'.($osc+1).' EG Level Keyboard Tracking');
@@ -1385,7 +1431,6 @@ sub Pitch_MG_Frame {
     my $modwavf=$subframe->Frame()->grid(-columnspan=>2);
 
     $modwavf->Label(-text=>'Modulation Waveform:', -font=>'Sans 8')->grid(-row=>0, -columnspan=>6);
-    #my @modwavlabel=('tri', "saw\x{2191}", "saw\x{2193}", 'sqr1', 'rand', 'sqr2');
     my @modwavlabel=('tri.xbm', 'sawup.xbm', 'sawdn.xbm', 'square.xbm', 'rand.xbm', 'square2.xbm');
     for (my $n=0;$n<=5;$n++) {
         $modwavf->Radiobutton(%RadioB_defaults,
@@ -1461,7 +1506,7 @@ sub Main_Osc_Frame {
     $subframe->Label(%Scale_label_defaults,
         -width        => 4,
         -textvariable => \$pancurr
-    ),-padx=>4);
+    ),-padx=>4, -pady=>4, -sticky=>'s');
 
 # Sliders
     StdSlider(\$subframe, \$Csend_lvl[$osc],   0,  9,  1, 1, (29+($osc*67)), 'C Send Level');
@@ -1516,8 +1561,6 @@ sub Main_FX_Frame {
     $FX_dynmod_entry->Subwidget("arrow")->configure(%arrow_defaults);
 
     StdSlider(\$subframe, \$FXmodint[$fxnr],  -15,  15,   3, 1, (167+($fxnr*11)), 'Dynamic Modulation Intensity');
-#    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0, 100,  10, 1, (175+($fxnr*11)), 'Balance 1 (DRY<-50:50->EFF)');
-#    StdSlider(\$subframe, \$FXbalance2[$fxnr],  0, 100,  10, 1, (176+($fxnr*11)), 'Balance 2 (DRY<-50:50->EFF)');
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -1604,6 +1647,24 @@ sub ShowFXCtrls {
     elsif ($ty==15) { FX_DDelay($fxnr,$name,$ty); }
     elsif ($ty<=18) { FX_MTDelay($fxnr,$name,$ty); }
     elsif ($ty<=20) { FX_StChorus($fxnr,$name,$ty); }
+    elsif ($ty<=22) { FX_QXChorus($fxnr,$name,$ty); }
+    elsif ($ty==23) { FX_HmChorus($fxnr,$name,$ty); }
+    elsif ($ty==24) { FX_SymEns($fxnr,$name,$ty); }
+    elsif ($ty<=27) { FX_Flanger($fxnr,$name,$ty); }
+    elsif ($ty==28) { FX_Exciter($fxnr,$name,$ty); }
+    elsif ($ty==29) { FX_Enhancer($fxnr,$name,$ty); }
+    elsif ($ty<=31) { FX_Distortion($fxnr,$name,$ty); }
+    elsif ($ty<=33) { FX_Phaser($fxnr,$name,$ty); }
+    elsif ($ty==34) { FX_RotSpk($fxnr,$name,$ty); }
+    elsif ($ty<=36) { FX_Tremolo($fxnr,$name,$ty); }
+    elsif ($ty==37) { FX_ParamEQ($fxnr,$name,$ty); }
+    elsif ($ty<=39) { FX_ChFlDelay($fxnr,$name,$ty); }
+    elsif ($ty<=41) { FX_DelHaRm($fxnr,$name,$ty); }
+    elsif ($ty==42) { FX_DelChorus($fxnr,$name,$ty); }
+    elsif ($ty==43) { FX_DelFlang($fxnr,$name,$ty); }
+    elsif ($ty<=45) { FX_DelDistOdr($fxnr,$name,$ty); }
+    elsif ($ty==46) { FX_DelPhaser($fxnr,$name,$ty); }
+    elsif ($ty==47) { FX_DelRotSpk($fxnr,$name,$ty); }
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
@@ -1612,26 +1673,20 @@ sub ShowFXCtrls {
 # Reverbs: 1,2,3 (Hall type), 4,5,6 (Room type), 7,8,9 (Plate type)
 sub FX_Reverb {
     my($fxnr,$name,$ty)=@_;
+    my @vals1; my @vals2; my $text=' [x/10 sec]'; my $mod='-2';
+    if    ($ty<=3) { @vals1=qw(2 99 24); @vals2=qw(0 99 11); }
+    elsif ($ty<=6) { @vals1=qw(2 49  9); @vals2=qw(0 99 11); }
+    elsif ($ty<=9) { @vals1=qw(0 99 11); @vals2=qw(1 10  1); $text=''; $mod=''; }
     my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
-    if ($ty<=3) {
-        StdSlider(\$subframe, \$FXparm[0][$fxnr],   2,   99,   24,   1, (168+($fxnr*11)), 'Reverb Time [x/10 sec]', '-2');
-    } elsif ($ty<=6) {
-        StdSlider(\$subframe, \$FXparm[0][$fxnr],   2,   49,    9,   1, (168+($fxnr*11)), 'Reverb Time [x/10 sec]', '-2');
-    } elsif ($ty<=9) {
-        StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,   99,   11,   1, (168+($fxnr*11)), 'Reverb Time');
-    }
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   @vals1,          1, (168+($fxnr*11)), 'Reverb Time'.$text, $mod);
     StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,  200,   25,   1, (169+($fxnr*11)), 'Pre Delay [ms]');
-    if ($ty<=6) {
-        StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'E.R Level');
-    } elsif ($ty<=9) {
-        StdSlider(\$subframe, \$FXparm[4][$fxnr],   1,   10,    1,   1, (170+($fxnr*11)), 'E.R Level');
-    }
+    StdSlider(\$subframe, \$FXparm[4][$fxnr],   @vals2,          1, (170+($fxnr*11)), 'E.R Level');
     StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (171+($fxnr*11)), 'High Damp [%]');
-    $subframe->Label()->grid(-columnspan=>2);
+    GridLabel(\$subframe, '');
     StdSlider(\$subframe, \$FXparm[7][$fxnr], -12,   12,    3,   1, (172+($fxnr*11)), 'EQ Low [dB]');
     StdSlider(\$subframe, \$FXparm[6][$fxnr], -12,   12,    3,   1, (173+($fxnr*11)), 'EQ High [dB]');
-    $subframe->Label()->grid(-columnspan=>2);
-    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
 }
 
 # Early Reflection: 10,11,12
@@ -1640,11 +1695,11 @@ sub FX_EarlyRefl {
     my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
     StdSlider(\$subframe, \$FXparm[0][$fxnr], 100,  800,  100,  10, (168+($fxnr*11)), 'Early Reflection Time [ms]', '/10-10');
     StdSlider(\$subframe, \$FXparm[1][$fxnr],   0,  200,   25,   1, (169+($fxnr*11)), 'Pre Delay [ms]');
-    $subframe->Label()->grid(-columnspan=>2);
+    GridLabel(\$subframe, '');
     StdSlider(\$subframe, \$FXparm[7][$fxnr], -12,   12,    3,   1, (170+($fxnr*11)), 'EQ Low [dB]');
     StdSlider(\$subframe, \$FXparm[6][$fxnr], -12,   12,    3,   1, (171+($fxnr*11)), 'EQ High [dB]');
-    $subframe->Label()->grid(-columnspan=>2);
-    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
 }
 
 # Stereo Delay: 13,14
@@ -1655,11 +1710,11 @@ sub FX_StDelay {
     StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,  500,  100,   1, (169+($fxnr*11)), 'Delay Time Right [ms]');
     StdSlider(\$subframe, \$FXparm[2][$fxnr], -99,   99,   22,   1, (170+($fxnr*11)), 'Feedback [%]');
     StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,   99,   11,   1, (171+($fxnr*11)), 'High Damp [%]');
-    $subframe->Label()->grid(-columnspan=>2);
+    GridLabel(\$subframe, '');
     StdSlider(\$subframe, \$FXparm[7][$fxnr], -12,   12,    3,   1, (172+($fxnr*11)), 'EQ Low [dB]');
     StdSlider(\$subframe, \$FXparm[6][$fxnr], -12,   12,    3,   1, (173+($fxnr*11)), 'EQ High [dB]');
-    $subframe->Label()->grid(-columnspan=>2);
-    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
 }
 
 # Dual Delay: 15
@@ -1669,12 +1724,12 @@ sub FX_DDelay {
     StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  500,  100,   1, (168+($fxnr*11)), 'Delay Time Left [ms]');
     StdSlider(\$subframe, \$FXparm[2][$fxnr], -99,   99,   22,   1, (169+($fxnr*11)), 'Feedback Left [%]');
     StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'High Damp Left [%]');
-    $subframe->Label()->grid(-columnspan=>2);
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+    GridLabel(\$subframe, '');
     StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,  500,  100,   1, (171+($fxnr*11)), 'Delay Time Right [ms]');
     StdSlider(\$subframe, \$FXparm[6][$fxnr], -99,   99,   22,   1, (172+($fxnr*11)), 'Feedback Right [%]');
     StdSlider(\$subframe, \$FXparm[7][$fxnr],   0,   99,   11,   1, (173+($fxnr*11)), 'High Damp Right [%]');
-    $subframe->Label()->grid(-columnspan=>2);
-    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
+    DFXSlider(\$subframe, \$FXbalance2[$fxnr], (176+($fxnr*11)));
 }
 
 # Multi Tap Delay: 16,17,18
@@ -1684,38 +1739,323 @@ sub FX_MTDelay {
     StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  500,  100,   1, (168+($fxnr*11)), 'Delay Time 1');
     StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,  500,  100,   1, (169+($fxnr*11)), 'Delay Time 2');
     StdSlider(\$subframe, \$FXparm[4][$fxnr], -99,   99,   22,   1, (170+($fxnr*11)), 'Feedback');
-    $subframe->Label()->grid(-columnspan=>2);
+    GridLabel(\$subframe, '');
     StdSlider(\$subframe, \$FXparm[6][$fxnr], -12,   12,    3,   1, (171+($fxnr*11)), 'EQ Low [dB]');
     StdSlider(\$subframe, \$FXparm[7][$fxnr], -12,   12,    3,   1, (172+($fxnr*11)), 'EQ High [dB]');
-    $subframe->Label()->grid(-columnspan=>2);
-    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
 }
 
 # Stereo Chorus: 19,20
 sub FX_StChorus {
     my($fxnr,$name,$ty)=@_;
+    my @modwavlabel=('sine', 'triangle');
     my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
     StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  200,   50,   1, (168+($fxnr*11)), 'Delay Time [ms]');
-   # Modulation Waveform
-    my $modwavf=$subframe->Frame()->grid(-columnspan=>2);
-    $modwavf->Label(-text=>'Mod Waveform: ', -font=>'Sans 8')->pack(-side=>'left');
-    my @modwavlabel=('sine', 'triangle');
-    for (my $n=0;$n<=1;$n++) {
-        $modwavf->Radiobutton(
-            -text     => $modwavlabel[$n],
-            -font     => 'Sans 8',
-            -value    => $n,
-            -variable => \$FXparm[1][$fxnr],
-            -command  => sub{ SendPaChMsg((171+($fxnr*11)),$FXparm[1][$fxnr]); }
-        )->pack(-side=>'left');
-    }
+    OptSelect(\$subframe, \$FXparm[1][$fxnr], \@modwavlabel,        (171+($fxnr*11)), 'Mod Waveform: ');
     StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'Modulation Depth');
     StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,  216,   36,   1, (169+($fxnr*11)), 'Modulation Speed [0.03 - 30 Hz]');
-    $subframe->Label()->grid(-columnspan=>2);
+    GridLabel(\$subframe, '');
     StdSlider(\$subframe, \$FXparm[4][$fxnr], -12,   12,    3,   1, (172+($fxnr*11)), 'EQ Low [dB]');
     StdSlider(\$subframe, \$FXparm[5][$fxnr], -12,   12,    3,   1, (173+($fxnr*11)), 'EQ High [dB]');
-    $subframe->Label()->grid(-columnspan=>2);
-    StdSlider(\$subframe, \$FXbalance1[$fxnr],  0,  100,   10,   1, (175+($fxnr*11)), 'DRY:FX Balance (DRY<-50:50->FX)');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Quad/Cross Chorus: 21,22
+sub FX_QXChorus {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  250,   50,   1, (168+($fxnr*11)), 'Delay Time L [ms]');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr],   0,  250,   50,   1, (169+($fxnr*11)), 'Delay Time R [ms]');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'Mod Depth');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   1,   99,   14,   1, (171+($fxnr*11)), 'Mod Speed');
+
+
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr], -12,   12,    3,   1, (173+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[6][$fxnr], -12,   12,    3,   1, (174+($fxnr*11)), 'EQ High [dB]');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Harmonic Chorus: 23
+sub FX_HmChorus {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  500,  100,   1, (168+($fxnr*11)), 'Delay Time 1 [ms]');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr],   0,  500,  100,   1, (169+($fxnr*11)), 'Delay Time 2 [ms]');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'Modulation Depth');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   1,   99,   14,   1, (171+($fxnr*11)), 'Modulation Speed');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,   18,    2,   1, (172+($fxnr*11)), 'Frequency Split Point');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Symphonic Ensemble: 24
+sub FX_SymEns {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,   99,   11,   1, (168+($fxnr*11)), 'Modulation Depth');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr], -12,   12,    3,   1, (169+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr], -12,   12,    3,   1, (170+($fxnr*11)), 'EQ High [dB]');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Flanger: 25,26,27
+sub FX_Flanger {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  200,   50,   1, (168+($fxnr*11)), 'Delay Time [ms]');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr], -99,   99,   22,   1, (169+($fxnr*11)), 'Resonance');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'Mod Depth');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   1,   99,   14,   1, (171+($fxnr*11)), 'Mod Speed');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr], -12,   12,    3,   1, (170+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr], -12,   12,    3,   1, (171+($fxnr*11)), 'EQ High [dB]');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Exciter: 28
+sub FX_Exciter {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr], -99,   99,   22,   1, (168+($fxnr*11)), 'Blend');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr],   1,   10,    1,   1, (169+($fxnr*11)), 'Emphatic Point');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr], -12,   12,    3,   1, (170+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr], -12,   12,    3,   1, (171+($fxnr*11)), 'EQ High [dB]');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Enhancer: 29
+sub FX_Enhancer {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,   99,   11,   1, (168+($fxnr*11)), 'Harmonic Density');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr],   1,   20,    3,   1, (169+($fxnr*11)), 'Hot Spot');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'Stereo Width');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   1,   99,   14,   1, (171+($fxnr*11)), 'Delay Time');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr], -12,   12,    3,   1, (172+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr], -12,   12,    3,   1, (173+($fxnr*11)), 'EQ High [dB]');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Distortion: 30,31
+sub FX_Distortion {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   1,  111,   11,   1, (168+($fxnr*11)), 'Drive (Edge)');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr],   0,   99,   11,   1, (169+($fxnr*11)), 'Resonance');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'Hot Spot');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,   99,   11,   1, (171+($fxnr*11)), 'Out Level');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr], -12,   12,    3,   1, (172+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr], -12,   12,    3,   1, (173+($fxnr*11)), 'EQ High [dB]');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Phaser: 32,33
+sub FX_Phaser {
+    my($fxnr,$name,$ty)=@_;
+    my @modwavlabel=('sine', 'triangle');
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,   99,   11,   1, (168+($fxnr*11)), 'Manual');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'Mod Depth');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr],   0,  216,   36,   1, (169+($fxnr*11)), 'Modulation Speed [0.03 - 30 Hz]');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr], -99,   99,   22,   1, (171+($fxnr*11)), 'Feedback [%]');
+    GridLabel(\$subframe, '');
+    OptSelect(\$subframe, \$FXparm[4][$fxnr], \@modwavlabel,        (172+($fxnr*11)), 'Mod Waveform: ');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Rotary Speaker: 34
+sub FX_RotSpk {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,   15,    3,   1, (168+($fxnr*11)), 'Vibrato Depth');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr],   1,   15,    2,   1, (169+($fxnr*11)), 'Acceleration');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   1,   99,   14,   1, (170+($fxnr*11)), 'Slow Speed');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   1,   99,   14,   1, (171+($fxnr*11)), 'Fast Speed');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Tremolo: 35,36
+sub FX_Tremolo {
+    my($fxnr,$name,$ty)=@_;
+    my @modwavlabel=('sine', 'triangle');
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    OptSelect(\$subframe, \$FXparm[0][$fxnr], \@modwavlabel,        (168+($fxnr*11)), 'Mod Waveform: ');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr], -99,   99,   22,   1, (169+($fxnr*11)), 'Mod Shape');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,   99,   11,   1, (171+($fxnr*11)), 'LFO Depth');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,  216,   36,   1, (170+($fxnr*11)), 'Modulation Speed [0.03 - 30 Hz]');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr], -12,   12,    3,   1, (172+($fxnr*11)), 'EQ Low [dB]');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr], -12,   12,    3,   1, (173+($fxnr*11)), 'EQ High [dB]');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Parametric EQ: 37
+sub FX_ParamEQ {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,   29,    4,   1, (168+($fxnr*11)), 'Low Freq');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr], -12,   12,    3,   1, (169+($fxnr*11)), 'Low Gain [dB]');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'Mid Freq');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr], -12,   12,    3,   1, (171+($fxnr*11)), 'Mid Gain [dB]');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,   99,   11,   1, (172+($fxnr*11)), 'Mid Width');
+    GridLabel(\$subframe, '');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr],   0,   29,    4,   1, (173+($fxnr*11)), 'High Freq');
+    StdSlider(\$subframe, \$FXparm[6][$fxnr], -12,   12,    3,   1, (174+($fxnr*11)), 'High Gain [dB]');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Chorus/Flanger + Delay: 38,39
+sub FX_ChFlDelay {
+    my($fxnr,$name,$ty)=@_;
+    my @title;
+    $title[38]='Chorus';
+    $title[39]='Flanger';
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    GridLabel(\$subframe, $title[$ty]);
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,   50,   10,   1, (168+($fxnr*11)), 'Delay Time [ms]');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr], -99,   99,   22,   1, (169+($fxnr*11)), 'Feedback [%]');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (171+($fxnr*11)), 'Modulation Depth');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   1,   99,   14,   1, (170+($fxnr*11)), 'Modulation Speed');
+    GridLabel(\$subframe, '');
+    GridLabel(\$subframe, 'Delay');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,  450,   75,   1, (172+($fxnr*11)), 'Delay Time [ms]');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr], -99,   99,   22,   1, (173+($fxnr*11)), 'Feedback [%]');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+}
+
+# Delay + Hall/Room: 40,41
+sub FX_DelHaRm {
+    my($fxnr,$name,$ty)=@_;
+    my @title; my @to; my @iv;
+    $title[40]='Hall (R)'; $to[40]='99'; $iv[40]='24';
+    $title[41]='Room (R)'; $to[41]='49'; $iv[41]='9';
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    GridLabel(\$subframe, 'Delay (L)');
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,      500,      100, 1, (168+($fxnr*11)), 'Delay Time [ms]');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr], -99,       99,       22, 1, (169+($fxnr*11)), 'Feedback [%]');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,       99,       11, 1, (170+($fxnr*11)), 'High Damp [%]');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+    GridLabel(\$subframe, '');
+    GridLabel(\$subframe, $title[$ty]);
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   2, $to[$ty], $iv[$ty], 1, (171+($fxnr*11)), 'Reverb Time [x/10 sec]', '-2');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,       99,       11, 1, (173+($fxnr*11)), 'High Damp [%]');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr],   0,      150,       30, 1, (172+($fxnr*11)), 'Pre Delay [ms]');
+    DFXSlider(\$subframe, \$FXbalance2[$fxnr], (176+($fxnr*11)));
+}
+
+# Delay + Chorus: 42
+sub FX_DelChorus {
+    my($fxnr,$name,$ty)=@_;
+    my @modwavlabel=('sine', 'triangle');
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    GridLabel(\$subframe, 'Delay (L)');
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  500,  100,   1, (168+($fxnr*11)), 'Delay Time [ms]');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr], -99,   99,   22,   1, (169+($fxnr*11)), 'Feedback [%]');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'High Damp [%]');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+    GridLabel(\$subframe, '');
+    GridLabel(\$subframe, 'Chorus (R)');
+    OptSelect(\$subframe, \$FXparm[5][$fxnr], \@modwavlabel,        (173+($fxnr*11)), 'Mod Waveform: ');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,   99,   11,   1, (172+($fxnr*11)), 'Modulation Depth');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,  216,   36,   1, (171+($fxnr*11)), 'Modulation Speed [0.03 - 30 Hz]');
+    DFXSlider(\$subframe, \$FXbalance2[$fxnr], (176+($fxnr*11)));
+}
+
+# Delay + Flanger: 43
+sub FX_DelFlang {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    GridLabel(\$subframe, 'Delay (L)');
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  500,  100,   1, (168+($fxnr*11)), 'Delay Time [ms]');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr], -99,   99,   22,   1, (169+($fxnr*11)), 'Feedback [%]');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'High Damp [%]');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+    GridLabel(\$subframe, '');
+    GridLabel(\$subframe, 'Flanger (R)');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,   99,   11,   1, (172+($fxnr*11)), 'Modulation Depth');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,  216,   36,   1, (171+($fxnr*11)), 'Modulation Speed [0.03 - 30 Hz]');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr], -99,   99,   22,   1, (173+($fxnr*11)), 'Feedback [%]');
+    DFXSlider(\$subframe, \$FXbalance2[$fxnr], (176+($fxnr*11)));
+}
+
+# Delay + Distortion/Overdrive: 44,45
+sub FX_DelDistOdr {
+    my($fxnr,$name,$ty)=@_;
+    my @title;
+    $title[44]='Distortion (R)';
+    $title[45]='Over Drive (R)';
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    GridLabel(\$subframe, 'Delay (L)');
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  500,  100,   1, (168+($fxnr*11)), 'Delay Time [ms]');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr], -99,   99,   22,   1, (169+($fxnr*11)), 'Feedback [%]');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+    GridLabel(\$subframe, '');
+    GridLabel(\$subframe, $title[$ty]);
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   1,  111,   22,   1, (170+($fxnr*11)), 'Drive (Edge)');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,   99,   11,   1, (172+($fxnr*11)), 'Resonance');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr],   1,   99,   14,   1, (171+($fxnr*11)), 'Hot Spot');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr],   1,   99,   14,   1, (173+($fxnr*11)), 'Level');
+}
+
+# Delay + Phaser: 46
+sub FX_DelPhaser {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    GridLabel(\$subframe, 'Delay (L)');
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  500,  100,   1, (168+($fxnr*11)), 'Delay Time [ms]');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr], -99,   99,   22,   1, (169+($fxnr*11)), 'Feedback [%]');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   0,   99,   11,   1, (170+($fxnr*11)), 'High Damp [%]');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+    GridLabel(\$subframe, '');
+    GridLabel(\$subframe, 'Phaser (R)');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   0,   99,   11,   1, (172+($fxnr*11)), 'Modulation Depth');
+    StdSlider(\$subframe, \$FXparm[4][$fxnr],   0,  216,   36,   1, (171+($fxnr*11)), 'Modulation Speed [0.03 - 30 Hz]');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr], -99,   99,   22,   1, (173+($fxnr*11)), 'Feedback [%]');
+    DFXSlider(\$subframe, \$FXbalance2[$fxnr], (176+($fxnr*11)));
+}
+
+# Delay + Rotary Speaker: 47
+sub FX_DelRotSpk {
+    my($fxnr,$name,$ty)=@_;
+    my $subframe=StdFrame(\$FX_frame[$fxnr],$name);
+    GridLabel(\$subframe, 'Delay (L)');
+    StdSlider(\$subframe, \$FXparm[0][$fxnr],   0,  500,  100,   1, (168+($fxnr*11)), 'Delay Time [ms]');
+    StdSlider(\$subframe, \$FXparm[1][$fxnr], -99,   99,   22,   1, (169+($fxnr*11)), 'Feedback [%]');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance1[$fxnr], (175+($fxnr*11)));
+    GridLabel(\$subframe, '');
+    GridLabel(\$subframe, 'Rotary Speaker (R)');
+    StdSlider(\$subframe, \$FXparm[2][$fxnr],   1,   15,    2,   1, (170+($fxnr*11)), 'Acceleration');
+    StdSlider(\$subframe, \$FXparm[3][$fxnr],   1,   99,   14,   1, (171+($fxnr*11)), 'Slow Speed');
+    StdSlider(\$subframe, \$FXparm[5][$fxnr],   1,   99,   14,   1, (172+($fxnr*11)), 'Fast Speed');
+    GridLabel(\$subframe, '');
+    DFXSlider(\$subframe, \$FXbalance2[$fxnr], (176+($fxnr*11)));
 }
 
 #-------------------------------------------------------------------------------------------------------------------------
